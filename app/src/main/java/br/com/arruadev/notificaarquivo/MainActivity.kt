@@ -1,10 +1,15 @@
 package br.com.arruadev.notificaarquivo
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -35,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import java.time.Instant
 import java.time.ZoneId
@@ -46,6 +52,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // >>> DISPARA A NOTIFICAÇÃO DE TESTE ASSIM QUE O APP ABRIR <<<
+        dispararNotificacaoTeste(this)
+
         setContent {
             NotificaArquivoTheme {
                 NotificationArchiveScreen(
@@ -67,6 +77,29 @@ class MainActivity : ComponentActivity() {
     private fun openNotificationAccessSettings() {
         startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
     }
+}
+
+// >>> FUNÇÃO QUE GERA A NOTIFICAÇÃO DE TESTE <<<
+fun dispararNotificacaoTeste(context: Context) {
+    val channelId = "canal_teste_captura"
+    val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val channel = NotificationChannel(
+            channelId,
+            "Canal de Testes",
+            NotificationManager.IMPORTANCE_DEFAULT
+        )
+        notificationManager.createNotificationChannel(channel)
+    }
+
+    val builder = NotificationCompat.Builder(context, channelId)
+        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setContentTitle("Teste do NotificaArquivo")
+        .setContentText("Capturando essa notificação de teste!")
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+
+    notificationManager.notify(1, builder.build())
 }
 
 @Composable
@@ -241,6 +274,6 @@ private val DarkColors = darkColorScheme(
 
 @Composable
 private fun NotificaArquivoTheme(content: @Composable () -> Unit) {
-    val isDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val isDark = isSystemInDarkTheme()
     MaterialTheme(colorScheme = if (isDark) DarkColors else LightColors, content = content)
 }
