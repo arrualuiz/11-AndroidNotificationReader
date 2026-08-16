@@ -30,6 +30,7 @@ class NotificationCaptureService : NotificationListenerService() {
             applicationContext,
             CapturedNotification(
                 id = "${posted.key}:${posted.postTime}",
+                sourceKey = posted.key,
                 packageName = posted.packageName,
                 appName = appNameFor(posted.packageName),
                 title = title.take(500),
@@ -46,4 +47,3 @@ class NotificationCaptureService : NotificationListenerService() {
         packageName
     }
 }
-

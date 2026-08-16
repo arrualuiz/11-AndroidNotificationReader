@@ -8,8 +8,12 @@ Projeto inicial Android em Kotlin e Jetpack Compose. Esta primeira versao:
 - Guarda ate 500 itens localmente no aparelho.
 - Mostra o historico quando o aplicativo e reaberto.
 
-Ela ainda nao envia dados para a internet e ainda nao possui banco Room, login,
-Google Sheets ou edicao de categorias.
+A versao 0.2.0 tambem consolida notificacoes identicas, atualiza a tela ao vivo,
+permite limpar o historico, ignorar aplicativos repetitivos e enviar manualmente os
+registros para um Google Sheets por meio de um endpoint do Apps Script.
+
+Ela ainda nao possui banco Room, login, sincronizacao automatica ou edicao de
+categorias dentro do Android.
 
 ## O que instalar
 
@@ -42,15 +46,28 @@ para sincronizar o Gradle, instalar SDKs, depurar e gerar o APK.
 Em aparelhos Xiaomi/MIUI, habilite tambem o inicio automatico do app e remova a
 restricao de bateria se a captura parar depois de algum tempo.
 
+## Como conectar ao Google Sheets
+
+Na pasta `google-sheets` existem tres entregaveis:
+
+- `Modelo-Notifica-Arquivo.xlsx`: planilha pronta para importar no Google Drive.
+- `Code.gs`: endpoint que recebe os dados enviados pelo Android.
+- `COMO-CONECTAR.md`: instrucoes completas de configuracao e implantacao.
+
+Depois de implantar o Apps Script como Aplicativo da Web, copie a URL `/exec` e o
+token para o painel **Google Sheets > Configurar** do aplicativo. O botao
+**Enviar agora** manda o historico local; IDs existentes nao sao duplicados.
+
 ## Onde comecar a ler o codigo
 
 - `MainActivity.kt`: tela e botao de permissao.
 - `NotificationCaptureService.kt`: recebe cada notificacao nova.
 - `NotificationStore.kt`: salva e recupera os dados locais.
+- `SheetsSync.kt`: envia um lote JSON para o Apps Script.
 - `CapturedNotification.kt`: define os campos de uma notificacao.
 - `docs/ARQUITETURA.md`: desenho da evolucao para Sheets, dashboard e iOS.
 
 ## Proxima pequena entrega
 
-Substituir o armazenamento provisório por Room, adicionar categorias editaveis e
-um filtro de aplicativos que nunca devem ter o conteudo salvo.
+Substituir o armazenamento provisorio por Room, adicionar categorias editaveis no
+Android e agendar sincronizacao automatica somente em redes confiaveis.
