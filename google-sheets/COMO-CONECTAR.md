@@ -35,6 +35,10 @@ Na aba `Categorias`, use:
 4. Em **Quem pode acessar**, escolha **Qualquer pessoa**.
 5. Confirme a implantacao e copie a URL terminada em `/exec`.
 
+Ao substituir o `Code.gs` por uma versao mais nova, abra **Implantar > Gerenciar
+implantacoes**, edite a implantacao, escolha **Nova versao** e confirme. Apenas salvar
+o codigo nao atualiza a URL `/exec` que o Android esta usando.
+
 O endpoint precisa ficar acessivel sem login porque o aplicativo Android nao realiza
 OAuth nesta primeira versao. O script rejeita requisicoes cujo token nao confere.
 

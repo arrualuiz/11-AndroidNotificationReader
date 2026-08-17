@@ -61,9 +61,10 @@ function doPost(event) {
       return json_({ ok: false, error: 'Token invalido.' });
     }
 
-    prepararPlanilha();
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = spreadsheet.getSheetByName(SHEETS.notifications);
+    const sheet = ensureSheet_(spreadsheet, SHEETS.notifications, NOTIFICATION_HEADERS);
+    ensureSheet_(spreadsheet, SHEETS.categories, CATEGORY_HEADERS);
+    ensureSheet_(spreadsheet, SHEETS.applications, APPLICATION_HEADERS);
     const rules = readCategoryRules_(spreadsheet);
     const existingIds = readExistingIds_(sheet);
     const notifications = Array.isArray(payload.notifications) ? payload.notifications : [];
@@ -107,9 +108,20 @@ function doPost(event) {
       sheet.getRange(2, 11, sheet.getLastRow() - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
     }
 
-    rebuildApplications_();
+    let summaryWarning = '';
+    try {
+      rebuildApplications_();
+    } catch (summaryError) {
+      summaryWarning = String(summaryError.message || summaryError);
+    }
     SpreadsheetApp.flush();
-    return json_({ ok: true, inserted: rows.length, duplicates, ignored });
+    return json_({
+      ok: true,
+      inserted: rows.length,
+      duplicates,
+      ignored,
+      summaryWarning,
+    });
   } catch (error) {
     return json_({ ok: false, error: String(error.message || error) });
   } finally {
@@ -208,7 +220,6 @@ function ensureSheet_(spreadsheet, name, headers) {
   if (currentHeaders.join('|') !== headers.join('|')) {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   }
-  sheet.setFrozenRows(1);
   return sheet;
 }
 

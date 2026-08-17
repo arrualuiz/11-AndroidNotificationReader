@@ -440,7 +440,8 @@ private fun syncStatusText(
 ): String = when (status) {
     SyncStatus.Idle -> when {
         !configured -> "Endpoint ainda nao configurado."
-        metadata.lastError.isNotBlank() -> "Automatico ativo; ultima tentativa falhou: ${metadata.lastError}"
+        metadata.lastError.isNotBlank() ->
+            "Automatico ativo; $pendingCount pendentes. Falha: ${metadata.lastError}"
         pendingCount > 0 -> "Automatico ativo; $pendingCount aguardando envio."
         metadata.lastSuccessAt > 0 -> "Automatico ativo; sincronizado em ${formatTimestamp(metadata.lastSuccessAt)}."
         else -> "Automatico ativo; aguardando notificacoes."
