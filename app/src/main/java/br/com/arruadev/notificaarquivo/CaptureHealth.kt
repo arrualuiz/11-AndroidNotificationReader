@@ -56,6 +56,7 @@ object NotificationCommands {
 
     fun dismiss(context: Context, notification: CapturedNotification) {
         NotificationStore.remove(context, notification.id)
+        if (NotificationCaptureService.dismissNow(notification)) return
         context.sendBroadcast(
             Intent(ACTION_DISMISS)
                 .setPackage(context.packageName)

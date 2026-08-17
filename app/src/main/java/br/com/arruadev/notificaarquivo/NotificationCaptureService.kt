@@ -11,6 +11,26 @@ import android.service.notification.StatusBarNotification
 import androidx.core.content.ContextCompat
 
 class NotificationCaptureService : NotificationListenerService() {
+    data class ReconcileResult(
+        val activeCount: Int,
+        val removedCount: Int
+    )
+
+    companion object {
+        @Volatile
+        private var connectedInstance: NotificationCaptureService? = null
+
+        fun reconcileNow(): ReconcileResult? =
+            connectedInstance?.reconcileWithActiveNotifications()
+
+        fun dismissNow(notification: CapturedNotification): Boolean {
+            val service = connectedInstance ?: return false
+            service.cancelNotification(notification.sourceKey)
+            NotificationStore.remove(service.applicationContext, notification.id)
+            return true
+        }
+    }
+
     private var receiverRegistered = false
 
     private val commandsReceiver = object : BroadcastReceiver() {
@@ -24,6 +44,7 @@ class NotificationCaptureService : NotificationListenerService() {
 
     override fun onCreate() {
         super.onCreate()
+        connectedInstance = this
         ContextCompat.registerReceiver(
             this,
             commandsReceiver,
@@ -38,10 +59,12 @@ class NotificationCaptureService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        connectedInstance = this
         CaptureHealthStore.setConnected(applicationContext, true)
     }
 
     override fun onListenerDisconnected() {
+        if (connectedInstance === this) connectedInstance = null
         CaptureHealthStore.setConnected(applicationContext, false)
         super.onListenerDisconnected()
     }
@@ -53,6 +76,7 @@ class NotificationCaptureService : NotificationListenerService() {
     }
 
     override fun onDestroy() {
+        if (connectedInstance === this) connectedInstance = null
         CaptureHealthStore.setConnected(applicationContext, false)
         if (receiverRegistered) unregisterReceiver(commandsReceiver)
         receiverRegistered = false
@@ -66,7 +90,7 @@ class NotificationCaptureService : NotificationListenerService() {
         if (id.isNotBlank()) NotificationStore.remove(applicationContext, id)
     }
 
-    private fun reconcileWithActiveNotifications() {
+    private fun reconcileWithActiveNotifications(): ReconcileResult {
         val active = runCatching { activeNotifications?.toList().orEmpty() }
             .getOrDefault(emptyList())
             .filterNot { it.packageName == applicationContext.packageName }
@@ -76,8 +100,15 @@ class NotificationCaptureService : NotificationListenerService() {
         active.forEach { posted ->
             if (saveNotification(posted, scheduleSync = false)) foundNewItems = true
         }
-        NotificationStore.removeSyncedNotActive(applicationContext, activeKeys)
+        val removedCount = NotificationStore.removeSyncedNotActive(
+            applicationContext,
+            activeKeys
+        )
         if (foundNewItems) SyncScheduler.scheduleImmediate(applicationContext)
+        return ReconcileResult(
+            activeCount = activeKeys.size,
+            removedCount = removedCount
+        )
     }
 
     private fun saveNotification(

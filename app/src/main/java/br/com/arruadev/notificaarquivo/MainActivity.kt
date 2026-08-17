@@ -73,6 +73,13 @@ private sealed interface SyncStatus {
     data class Error(val message: String) : SyncStatus
 }
 
+private sealed interface HistorySyncStatus {
+    data object Idle : HistorySyncStatus
+    data object Running : HistorySyncStatus
+    data class Success(val removed: Int, val active: Int) : HistorySyncStatus
+    data class Error(val message: String) : HistorySyncStatus
+}
+
 class MainActivity : ComponentActivity() {
     private var notifications by mutableStateOf<List<CapturedNotification>>(emptyList())
     private var ignoredApps by mutableStateOf<List<IgnoredApp>>(emptyList())
@@ -83,6 +90,7 @@ class MainActivity : ComponentActivity() {
     private var syncSettings by mutableStateOf(SheetsSyncSettings())
     private var syncMetadata by mutableStateOf(SheetsSyncMetadata())
     private var syncStatus by mutableStateOf<SyncStatus>(SyncStatus.Idle)
+    private var historySyncStatus by mutableStateOf<HistorySyncStatus>(HistorySyncStatus.Idle)
     private var receiverRegistered = false
 
     private val changesReceiver = object : BroadcastReceiver() {
@@ -110,16 +118,14 @@ class MainActivity : ComponentActivity() {
                     syncSettings = syncSettings,
                     syncMetadata = syncMetadata,
                     syncStatus = syncStatus,
+                    historySyncStatus = historySyncStatus,
                     onOpenSettings = ::openNotificationAccessSettings,
                     onOpenBatterySettings = ::openBatterySettings,
                     onDismissNotification = { item ->
                         NotificationCommands.dismiss(this, item)
                     },
                     onHideNotification = { item -> NotificationStore.hide(this, item) },
-                    onReconcile = {
-                        NotificationCommands.reconcile(this)
-                        SyncScheduler.scheduleImmediate(this)
-                    },
+                    onHistorySync = ::syncHistory,
                     onIgnoreApp = { packageName, appName ->
                         NotificationStore.ignorePackage(this, packageName, appName)
                     },
@@ -228,6 +234,50 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private fun syncHistory() {
+        if (historySyncStatus is HistorySyncStatus.Running) return
+
+        val currentSettings = syncSettings
+        val snapshot = NotificationStore.pending(this)
+        historySyncStatus = HistorySyncStatus.Running
+        syncStatus = SyncStatus.Running
+        SheetsSyncMetadataStore.recordAttempt(this)
+
+        lifecycleScope.launch {
+            runCatching {
+                val sheetsResult = withContext(Dispatchers.IO) {
+                    SheetsSyncClient.sync(
+                        settings = currentSettings,
+                        deviceId = DeviceInfo.id(this@MainActivity),
+                        notifications = snapshot
+                    )
+                }
+                NotificationStore.markSynced(this@MainActivity, snapshot)
+                SheetsSyncMetadataStore.recordSuccess(this@MainActivity, sheetsResult)
+
+                val reconcileResult = NotificationCaptureService.reconcileNow()
+                    ?: error("O servico de captura nao esta conectado.")
+                sheetsResult to reconcileResult
+            }.onSuccess { (sheetsResult, reconcileResult) ->
+                syncStatus = SyncStatus.Success(
+                    sheetsResult.inserted,
+                    sheetsResult.duplicates,
+                    sheetsResult.ignored
+                )
+                historySyncStatus = HistorySyncStatus.Success(
+                    removed = reconcileResult.removedCount,
+                    active = reconcileResult.activeCount
+                )
+                refreshState()
+            }.onFailure { error ->
+                val message = error.message ?: "Falha desconhecida."
+                SheetsSyncMetadataStore.recordFailure(this@MainActivity, message)
+                syncStatus = SyncStatus.Error(message)
+                historySyncStatus = HistorySyncStatus.Error(message)
+            }
+        }
+    }
 }
 
 @Composable
@@ -241,11 +291,12 @@ private fun NotificationArchiveScreen(
     syncSettings: SheetsSyncSettings,
     syncMetadata: SheetsSyncMetadata,
     syncStatus: SyncStatus,
+    historySyncStatus: HistorySyncStatus,
     onOpenSettings: () -> Unit,
     onOpenBatterySettings: () -> Unit,
     onDismissNotification: (CapturedNotification) -> Unit,
     onHideNotification: (CapturedNotification) -> Unit,
-    onReconcile: () -> Unit,
+    onHistorySync: () -> Unit,
     onIgnoreApp: (String, String) -> Unit,
     onAllowApp: (String) -> Unit,
     onShowNotification: (String) -> Unit,
@@ -309,7 +360,7 @@ private fun NotificationArchiveScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "${notifications.size} itens",
+                        text = historySyncStatusText(historySyncStatus, notifications.size),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp
                     )
@@ -319,10 +370,18 @@ private fun NotificationArchiveScreen(
                 }
                 Spacer(modifier = Modifier.size(6.dp))
                 TextButton(
-                    onClick = onReconcile,
-                    enabled = accessGranted && captureHealth.listenerConnected
+                    onClick = onHistorySync,
+                    enabled = accessGranted &&
+                        captureHealth.listenerConnected &&
+                        historySyncStatus !is HistorySyncStatus.Running
                 ) {
-                    Text("Sincronizar")
+                    Text(
+                        if (historySyncStatus is HistorySyncStatus.Running) {
+                            "Aguarde..."
+                        } else {
+                            "Sincronizar"
+                        }
+                    )
                 }
             }
 
@@ -381,6 +440,15 @@ private fun NotificationArchiveScreen(
         )
     }
 }
+
+private fun historySyncStatusText(status: HistorySyncStatus, itemCount: Int): String =
+    when (status) {
+        HistorySyncStatus.Idle -> "$itemCount itens"
+        HistorySyncStatus.Running -> "Sincronizando celular e Sheets..."
+        is HistorySyncStatus.Success ->
+            "${status.removed} removidos; ${status.active} ativos no celular"
+        is HistorySyncStatus.Error -> "Falha: ${status.message}"
+    }
 
 @Composable
 private fun AccessPanel(
