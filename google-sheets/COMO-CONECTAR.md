@@ -53,7 +53,7 @@ OAuth nesta primeira versao. O script rejeita requisicoes cujo token nao confere
 
 ## Configurar o Android
 
-1. Instale a versao 0.5.2 do Notifica Arquivo.
+1. Instale a versao 0.5.3 do Notifica Arquivo.
 2. Abra o painel **Google Sheets** e toque em **Configurar**.
 3. Cole a URL `/exec` da implantacao.
 4. Informe exatamente o token usado em `configurarToken`.

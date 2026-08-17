@@ -135,8 +135,18 @@ object NotificationStore {
     @Synchronized
     fun removeSyncedNotActive(context: Context, activeSourceKeys: Set<String>): Int {
         val current = readInternal(context)
+        val latestActiveItemBySource = current
+            .asSequence()
+            .filter { it.sourceKey in activeSourceKeys }
+            .groupBy { it.sourceKey }
+            .mapValues { (_, items) -> items.maxBy { it.postedAt } }
         val updated = current.filter { item ->
-            item.syncedAt == null || item.sourceKey in activeSourceKeys
+            when {
+                item.sourceKey in activeSourceKeys ->
+                    latestActiveItemBySource[item.sourceKey]?.id == item.id
+                item.syncedAt == null -> true
+                else -> false
+            }
         }
         if (updated == current) return 0
 
