@@ -10,25 +10,40 @@ const PROPERTY_KEYS = Object.freeze({
   financialSheet: 'SHEET_FINANCIAL',
   dashboardSheet: 'SHEET_DASHBOARD',
   helpSheet: 'SHEET_HELP',
+  backupSheet: 'SHEET_BACKUP',
 });
 
-const API_VERSION = '0.6.0';
+const API_VERSION = '0.6.1';
 
 const NOTIFICATION_HEADERS = [
-  'Recebido em',
-  'Aplicativo',
+  'Data notificacao',
+  'Categoria',
   'Titulo',
   'Texto',
-  'Categoria',
+  'Aplicativo',
   'ID',
+  'Recebido em',
   'Sensivel?',
-  'Data notificacao',
   'Pacote',
   'Chave fonte',
   'Device ID',
 ];
 
 const NOTIFICATION_COLUMNS = Object.freeze({
+  postedAt: 0,
+  category: 1,
+  title: 2,
+  text: 3,
+  appName: 4,
+  id: 5,
+  receivedAt: 6,
+  sensitive: 7,
+  packageName: 8,
+  sourceKey: 9,
+  deviceId: 10,
+});
+
+const PREVIOUS_NOTIFICATION_COLUMNS = Object.freeze({
   receivedAt: 0,
   appName: 1,
   title: 2,
@@ -40,6 +55,20 @@ const NOTIFICATION_COLUMNS = Object.freeze({
   packageName: 8,
   sourceKey: 9,
   deviceId: 10,
+});
+
+const LEGACY_NOTIFICATION_COLUMNS = Object.freeze({
+  id: 0,
+  deviceId: 1,
+  sourceKey: 2,
+  packageName: 3,
+  appName: 4,
+  title: 5,
+  text: 6,
+  postedAt: 7,
+  category: 8,
+  sensitive: 9,
+  receivedAt: 10,
 });
 
 const CATEGORY_HEADERS = ['Pacote', 'Aplicativo', 'Categoria', 'Incluir?', 'Sensivel?'];
@@ -61,7 +90,11 @@ function prepararPlanilha() {
   const config = configuredProperties_();
   const spreadsheet = runWithDebug_('prepararPlanilha/abrir-planilha', () => configuredSpreadsheet_(config));
   runStepsWithDebug_('prepararPlanilha', [
-    ['preparar-Notificacoes', () => ensureNotificationSheet_(spreadsheet, config.sheets.notifications)],
+    ['preparar-Notificacoes', () => ensureNotificationSheet_(
+      spreadsheet,
+      config.sheets.notifications,
+      config.sheets.backup
+    )],
     ['preparar-Categorias', () => ensureSheet_(spreadsheet, config.sheets.categories, CATEGORY_HEADERS)],
     ['preparar-Aplicativos', () => ensureSheet_(spreadsheet, config.sheets.applications, APPLICATION_HEADERS)],
     ['preparar-Financeiro', () => ensureNotificationSheet_(spreadsheet, config.sheets.financial)],
@@ -71,6 +104,7 @@ function prepararPlanilha() {
     ['categorizar-historico', () => updateNotificationCategories_(spreadsheet, config)],
     ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet, config)],
     ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet, config)],
+    ['reconstruir-Dashboard', () => rebuildDashboard_(spreadsheet, config)],
   ]);
   return `Planilha preparada: ${spreadsheet.getName()} (${spreadsheet.getId()})`;
 }
@@ -99,7 +133,46 @@ function atualizarResumos() {
     ['categorizar-historico', () => updateNotificationCategories_(spreadsheet, config)],
     ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet, config)],
     ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet, config)],
+    ['reconstruir-Dashboard', () => rebuildDashboard_(spreadsheet, config)],
   ]);
+}
+
+/**
+ * Faz backup da aba bruta e corrige linhas gravadas em ordens diferentes.
+ * Execute uma vez ao atualizar da API 0.6.0 para 0.6.1.
+ */
+function recuperarDadosMisturados() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) throw new Error('Planilha ocupada. Tente novamente.');
+
+  try {
+    const config = configuredProperties_();
+    const spreadsheet = configuredSpreadsheet_(config);
+    const source = spreadsheet.getSheetByName(config.sheets.notifications);
+    if (!source) throw new Error(`Aba ${config.sheets.notifications} nao encontrada.`);
+
+    const result = repairNotificationSheet_(
+      spreadsheet,
+      source,
+      config.sheets.backup,
+      true
+    );
+    runStepsWithDebug_('recuperarDadosMisturados', [
+      ['catalogar-categorias', () => syncCategoryCatalog_(spreadsheet, config)],
+      ['categorizar-historico', () => updateNotificationCategories_(spreadsheet, config)],
+      ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet, config)],
+      ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet, config)],
+      ['reconstruir-Dashboard', () => rebuildDashboard_(spreadsheet, config)],
+    ]);
+    SpreadsheetApp.flush();
+    console.log(JSON.stringify(result, null, 2));
+    return JSON.stringify(result);
+  } catch (error) {
+    const debug = writeErrorReport_('recuperarDadosMisturados', error);
+    throw new Error(`${String(error.message || error)}. Relatorio: ${debug.path}`);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function diagnosticarConfiguracao() {
@@ -181,14 +254,14 @@ function doPost(event) {
         ? automaticCategory
         : category;
       rows.push([
-        new Date(),
-        appName,
+        safeDate_(item.postedAt),
+        resolvedCategory,
         title,
         text,
-        resolvedCategory,
+        appName,
         id,
+        new Date(),
         rule ? rule.sensitive : resolvedCategory === 'Financeiro',
-        safeDate_(item.postedAt),
         packageName,
         clean_(item.sourceKey, 500),
         clean_(payload.deviceId, 300),
@@ -485,6 +558,85 @@ function rebuildApplications_(spreadsheet, config) {
   replaceDataRows_(target, APPLICATION_HEADERS.length, rows);
 }
 
+function rebuildDashboard_(spreadsheet, config) {
+  const source = spreadsheet.getSheetByName(config.sheets.notifications);
+  const target = ensurePlainSheet_(spreadsheet, config.sheets.dashboard);
+  const rows = source && source.getLastRow() >= 2
+    ? source
+        .getRange(2, 1, source.getLastRow() - 1, NOTIFICATION_HEADERS.length)
+        .getValues()
+        .filter((row) => String(row[NOTIFICATION_COLUMNS.id] || '').trim())
+    : [];
+  const categories = new Map();
+  const applications = new Map();
+  const today = Utilities.formatDate(new Date(), config.debugTimeZone, 'yyyy-MM-dd');
+  let receivedToday = 0;
+  let sensitiveCount = 0;
+
+  rows.forEach((row) => {
+    const category = String(row[NOTIFICATION_COLUMNS.category] || 'Sem categoria').trim() || 'Sem categoria';
+    const packageName = String(row[NOTIFICATION_COLUMNS.packageName] || '').trim();
+    const appName = String(row[NOTIFICATION_COLUMNS.appName] || packageName || 'Desconhecido').trim();
+    const appKey = packageName || appName;
+    const postedAt = dateValue_(row[NOTIFICATION_COLUMNS.postedAt]);
+
+    categories.set(category, (categories.get(category) || 0) + 1);
+    if (appKey) {
+      const current = applications.get(appKey) || { name: appName, count: 0 };
+      current.count += 1;
+      applications.set(appKey, current);
+    }
+    if (postedAt && Utilities.formatDate(postedAt, config.debugTimeZone, 'yyyy-MM-dd') === today) {
+      receivedToday += 1;
+    }
+    if (booleanValue_(row[NOTIFICATION_COLUMNS.sensitive])) sensitiveCount += 1;
+  });
+
+  const preferredCategories = [
+    'Financeiro',
+    'Mensagens',
+    'Trabalho',
+    'Sistema',
+    'Seguranca',
+    'Compras',
+    'Sem categoria',
+  ];
+  const categoryNames = preferredCategories.concat(
+    Array.from(categories.keys())
+      .filter((name) => !preferredCategories.includes(name))
+      .sort((a, b) => a.localeCompare(b))
+  );
+  const applicationRows = Array.from(applications.values())
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+
+  target.getRange('A1').setValue('Notifica Arquivo - Dashboard');
+  target.getRange('A2').setValue('Resumo dos dados recebidos do Android. A aba de backup nao entra nos indicadores.');
+  target.getRange('A4').setValue('Total');
+  target.getRange('C4').setValue('Hoje');
+  target.getRange('E4').setValue('Aplicativos');
+  target.getRange('G4').setValue('Sensiveis');
+  target.getRange('A5').setValue(rows.length);
+  target.getRange('C5').setValue(receivedToday);
+  target.getRange('E5').setValue(applications.size);
+  target.getRange('G5').setValue(sensitiveCount);
+
+  const previousRows = Math.max(1, target.getLastRow() - 7);
+  const writeCount = Math.max(previousRows, categoryNames.length + 1, applicationRows.length + 1);
+  const matrix = Array.from({ length: writeCount }, (_, index) => {
+    if (index === 0) return ['Categoria', 'Quantidade', '', 'Aplicativo', 'Quantidade'];
+    const category = categoryNames[index - 1];
+    const application = applicationRows[index - 1];
+    return [
+      category || '',
+      category ? categories.get(category) || 0 : '',
+      '',
+      application ? application.name : '',
+      application ? application.count : '',
+    ];
+  });
+  target.getRange(8, 1, matrix.length, matrix[0].length).setValues(matrix);
+}
+
 function ensureSheet_(spreadsheet, name, headers) {
   const sheet = spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name);
   const currentHeaders = sheet.getRange(1, 1, 1, headers.length).getDisplayValues()[0];
@@ -494,7 +646,7 @@ function ensureSheet_(spreadsheet, name, headers) {
   return sheet;
 }
 
-function ensureNotificationSheet_(spreadsheet, name) {
+function ensureNotificationSheet_(spreadsheet, name, backupName) {
   const sheet = spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name);
   const currentColumnCount = Math.max(sheet.getLastColumn(), NOTIFICATION_HEADERS.length);
   const currentHeaders = sheet
@@ -516,27 +668,234 @@ function ensureNotificationSheet_(spreadsheet, name) {
     return sheet;
   }
 
-  const indexByHeader = new Map(
-    relevantHeaders.map((header, index) => [headerKey_(header), index])
-  );
-  const missing = NOTIFICATION_HEADERS.filter((header) => !indexByHeader.has(headerKey_(header)));
-  if (missing.length > 0) {
-    throw new Error(
-      `A aba ${name} possui dados, mas faltam cabecalhos para migracao: ${missing.join(', ')}`
-    );
+  repairNotificationSheet_(spreadsheet, sheet, backupName, Boolean(backupName));
+  return sheet;
+}
+
+function repairNotificationSheet_(spreadsheet, sheet, backupName, createBackup) {
+  const width = Math.max(sheet.getLastColumn(), NOTIFICATION_HEADERS.length);
+  const rowCount = Math.max(0, sheet.getLastRow() - 1);
+  const headers = sheet.getRange(1, 1, 1, width).getDisplayValues()[0];
+  const rows = rowCount > 0 ? sheet.getRange(2, 1, rowCount, width).getValues() : [];
+  const backupSheet = createBackup
+    ? createRawBackupSheet_(spreadsheet, backupName, headers, rows)
+    : null;
+  const normalized = normalizeNotificationRows_(rows, notificationColumnsFromHeaders_(headers));
+
+  sheet.getRange(1, 1, 1, NOTIFICATION_HEADERS.length).setValues([NOTIFICATION_HEADERS]);
+  replaceDataRows_(sheet, NOTIFICATION_HEADERS.length, normalized.rows);
+
+  return {
+    ok: true,
+    apiVersion: API_VERSION,
+    sourceSheet: sheet.getName(),
+    backupSheet: backupSheet ? backupSheet.getName() : null,
+    inputRows: normalized.inputRows,
+    recoveredRows: normalized.rows.length,
+    duplicatesRemoved: normalized.duplicates,
+    unresolvedRows: normalized.unresolved,
+    detectedSchemas: normalized.schemas,
+  };
+}
+
+function createRawBackupSheet_(spreadsheet, requestedName, headers, rows) {
+  const baseName = String(requestedName || 'Backup dados').trim().slice(0, 100);
+  let name = baseName;
+  if (spreadsheet.getSheetByName(name)) {
+    const stamp = Utilities.formatDate(new Date(), configuredProperties_().debugTimeZone, 'yyyy-MM-dd HHmmss');
+    name = `${baseName.slice(0, 82)} ${stamp}`;
+    let suffix = 2;
+    while (spreadsheet.getSheetByName(name)) {
+      name = `${baseName.slice(0, 78)} ${stamp} ${suffix}`;
+      suffix += 1;
+    }
   }
 
-  const existingRows = sheet
-    .getRange(2, 1, rowCount, relevantHeaders.length)
-    .getValues();
-  const reorderedRows = existingRows.map((row) =>
-    NOTIFICATION_HEADERS.map((header) => row[indexByHeader.get(headerKey_(header))])
-  );
+  const backup = spreadsheet.insertSheet(name);
+  const width = Math.max(headers.length, NOTIFICATION_HEADERS.length);
+  const matrix = [headers, ...rows].map((row) => {
+    const copy = row.slice(0, width);
+    while (copy.length < width) copy.push('');
+    return copy;
+  });
+  backup.getRange(1, 1, matrix.length, width).setValues(matrix);
+  return backup;
+}
 
-  sheet
-    .getRange(1, 1, reorderedRows.length + 1, NOTIFICATION_HEADERS.length)
-    .setValues([NOTIFICATION_HEADERS, ...reorderedRows]);
-  return sheet;
+function normalizeNotificationRows_(rows, headerColumns) {
+  const schemas = [
+    ['nova', NOTIFICATION_COLUMNS],
+    ['anterior', PREVIOUS_NOTIFICATION_COLUMNS],
+    ['legada', LEGACY_NOTIFICATION_COLUMNS],
+  ];
+  const byId = new Map();
+  const schemaCounts = {};
+  let duplicates = 0;
+  let unresolved = 0;
+  let inputRows = 0;
+
+  rows.forEach((row, sourceIndex) => {
+    if (!row.some((value) => String(value ?? '').trim())) return;
+    inputRows += 1;
+
+    const ranked = schemas
+      .map(([name, columns]) => ({ name, columns, score: notificationSchemaScore_(row, columns) }))
+      .sort((a, b) => b.score - a.score);
+    const selected = ranked[0].score >= 5
+      ? ranked[0]
+      : { name: 'cabecalho', columns: headerColumns, score: 0 };
+    const normalizedRow = canonicalNotificationRow_(row, selected.columns);
+    const id = String(normalizedRow[NOTIFICATION_COLUMNS.id] || '').trim();
+    if (!id) {
+      unresolved += 1;
+      return;
+    }
+
+    schemaCounts[selected.name] = (schemaCounts[selected.name] || 0) + 1;
+    const candidate = { row: normalizedRow, sourceIndex };
+    if (!byId.has(id)) {
+      byId.set(id, candidate);
+      return;
+    }
+
+    duplicates += 1;
+    const existing = byId.get(id);
+    if (notificationCompleteness_(candidate.row) > notificationCompleteness_(existing.row)) {
+      byId.set(id, candidate);
+    }
+  });
+
+  const normalizedRows = Array.from(byId.values())
+    .sort((a, b) => {
+      const left = dateValue_(a.row[NOTIFICATION_COLUMNS.postedAt]);
+      const right = dateValue_(b.row[NOTIFICATION_COLUMNS.postedAt]);
+      if (left && right && left.getTime() !== right.getTime()) return left - right;
+      if (left && !right) return -1;
+      if (!left && right) return 1;
+      return a.sourceIndex - b.sourceIndex;
+    })
+    .map((item) => item.row);
+
+  return {
+    rows: normalizedRows,
+    inputRows,
+    duplicates,
+    unresolved,
+    schemas: schemaCounts,
+  };
+}
+
+function notificationColumnsFromHeaders_(headers) {
+  const fields = {
+    'data notificacao': 'postedAt',
+    categoria: 'category',
+    titulo: 'title',
+    texto: 'text',
+    aplicativo: 'appName',
+    id: 'id',
+    'recebido em': 'receivedAt',
+    sensivel: 'sensitive',
+    pacote: 'packageName',
+    'chave fonte': 'sourceKey',
+    'device id': 'deviceId',
+  };
+  const columns = {};
+  headers.forEach((header, index) => {
+    const field = fields[headerKey_(header)];
+    if (field) columns[field] = index;
+  });
+  return columns;
+}
+
+function notificationSchemaScore_(row, columns) {
+  let score = 0;
+  if (looksLikeNotificationId_(row[columns.id])) score += 5;
+  if (looksLikePackage_(row[columns.packageName])) score += 2;
+  if (looksLikeDate_(row[columns.postedAt])) score += 2;
+  if (looksLikeDate_(row[columns.receivedAt])) score += 1;
+  if (looksLikeBoolean_(row[columns.sensitive])) score += 2;
+  return score;
+}
+
+function canonicalNotificationRow_(row, columns) {
+  const postedAt = dateValue_(row[columns.postedAt]) || row[columns.postedAt] || '';
+  const receivedAt = dateValue_(row[columns.receivedAt]) || row[columns.receivedAt] || '';
+  return [
+    postedAt,
+    String(row[columns.category] || 'Sem categoria').trim() || 'Sem categoria',
+    row[columns.title] || '',
+    row[columns.text] || '',
+    row[columns.appName] || '',
+    String(row[columns.id] || '').trim(),
+    receivedAt,
+    booleanValue_(row[columns.sensitive]),
+    row[columns.packageName] || '',
+    row[columns.sourceKey] || '',
+    row[columns.deviceId] || '',
+  ];
+}
+
+function notificationCompleteness_(row) {
+  return row.reduce((score, value) => score + (String(value ?? '').trim() ? 1 : 0), 0);
+}
+
+function looksLikeNotificationId_(value) {
+  const text = String(value || '').trim();
+  return /^EXEMPLO-/i.test(text) || /:\d{10,}$/.test(text);
+}
+
+function looksLikePackage_(value) {
+  const text = String(value || '').trim();
+  return text === 'android' || /^[a-zA-Z][\w-]*(\.[\w-]+)+$/.test(text);
+}
+
+function looksLikeDate_(value) {
+  return Boolean(dateValue_(value));
+}
+
+function looksLikeBoolean_(value) {
+  if (typeof value === 'boolean') return true;
+  return ['true', 'false', 'verdadeiro', 'falso', 'sim', 'nao', 'não', '1', '0']
+    .includes(normalize_(value).trim());
+}
+
+function booleanValue_(value) {
+  if (typeof value === 'boolean') return value;
+  return ['true', 'verdadeiro', 'sim', '1'].includes(normalize_(value).trim());
+}
+
+function dateValue_(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === 'number' && value > 10000000000) {
+    const timestampDate = new Date(value);
+    return Number.isNaN(timestampDate.getTime()) ? null : timestampDate;
+  }
+
+  const text = String(value || '').trim();
+  if (!text) return null;
+  let match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (match) {
+    return new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4] || 0),
+      Number(match[5] || 0),
+      Number(match[6] || 0)
+    );
+  }
+  match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ ,T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (match) {
+    return new Date(
+      Number(match[3]),
+      Number(match[2]) - 1,
+      Number(match[1]),
+      Number(match[4] || 0),
+      Number(match[5] || 0),
+      Number(match[6] || 0)
+    );
+  }
+  return null;
 }
 
 function headerKey_(value) {
@@ -647,6 +1006,7 @@ function configuredProperties_() {
       financial: String(values[PROPERTY_KEYS.financialSheet]).trim(),
       dashboard: String(values[PROPERTY_KEYS.dashboardSheet]).trim(),
       help: String(values[PROPERTY_KEYS.helpSheet]).trim(),
+      backup: String(values[PROPERTY_KEYS.backupSheet]).trim(),
     },
   };
 }
