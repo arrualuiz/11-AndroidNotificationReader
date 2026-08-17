@@ -56,7 +56,20 @@ object NotificationStore {
     @Synchronized
     fun read(context: Context): List<CapturedNotification> {
         val original = readInternal(context)
-        val compacted = collapseDuplicates(original)
+        val compacted = collapseDuplicates(original).map { item ->
+            if (item.category.isBlank() || item.category == "Sem categoria") {
+                item.copy(
+                    category = NotificationCategorizer.categoryFor(
+                        packageName = item.packageName,
+                        appName = item.appName,
+                        title = item.title,
+                        text = item.text
+                    )
+                )
+            } else {
+                item
+            }
+        }
         if (compacted != original) writeNotifications(context, compacted)
         return compacted
     }

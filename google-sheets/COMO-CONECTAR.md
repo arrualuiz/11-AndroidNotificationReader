@@ -4,9 +4,19 @@
 
 - `Notificacoes`: dados brutos enviados pelo Android. Nao edite os IDs.
 - `Categorias`: regras editaveis por pacote Android.
+- `Financeiro`: copia automatica de Santander, C6 Bank, Inter, Caixa, Nubank, Neon e Riachuelo.
 - `Aplicativos`: resumo reconstruido pelo Apps Script depois de cada envio.
 - `Dashboard`: indicadores e graficos.
 - `Ajuda`: lembrete do fluxo e dos campos.
+
+O arquivo `Code.gs` usa duas configuracoes no inicio do codigo:
+
+- `SPREADSHEET_URL`: link completo da planilha que recebera os dados.
+- `SHEETS`: nomes exatos das abas usadas pelo script.
+
+Nesta versao, o destino configurado e a planilha de ID
+`1Q-Ccl5UngOts5X0yCPJ04USDVjk6rCciCyynOlPrVN0`. O script abre esse arquivo pelo
+link e nao depende da planilha que estiver ativa no navegador ou no editor.
 
 Na aba `Categorias`, use:
 
@@ -39,10 +49,33 @@ Ao substituir o `Code.gs` por uma versao mais nova, abra **Implantar > Gerenciar
 implantacoes**, edite a implantacao, escolha **Nova versao** e confirme. Apenas salvar
 o codigo nao atualiza a URL `/exec` que o Android esta usando.
 
-Na versao 0.4.0, execute tambem `configurarAtualizacaoAutomatica` uma vez pelo editor.
+Na versao 0.5.2 do script, execute tambem `configurarAtualizacaoAutomatica` uma vez pelo editor.
 Ela cria um acionador que atualiza a aba `Aplicativos` a cada 15 minutos. Essa tarefa
 fica separada do recebimento bruto: mesmo que o resumo tenha algum problema, a aba
 `Notificacoes` confirma o lote ao Android.
+
+Ao atualizar de uma versao anterior, execute `prepararPlanilha` novamente. Ela cria a
+aba `Financeiro`, preenche o catalogo de `Categorias`, categoriza os registros antigos
+e reconstrui os resumos sem apagar a aba `Notificacoes`. Depois publique uma **Nova
+versao** da implantacao para que a URL `/exec` use o codigo novo.
+
+## Diagnostico e relatorios de erro
+
+Antes de preparar, voce pode executar `diagnosticarConfiguracao`. Em caso de sucesso,
+ela apenas mostra no registro o ID da planilha e quais abas existem. Nenhum arquivo de
+debug e criado quando tudo funciona.
+
+Quando uma operacao falha, o script cria automaticamente no Google Drive:
+
+`NotificaArquivo-Debug/AAAA-MM-DD/HH-MM-SS-operacao-identificador.json`
+
+O relatorio contem a versao do servidor, etapa, planilha configurada, mensagem e stack
+trace. O token e o texto das notificacoes nao sao incluidos. `prepararPlanilha` tenta
+todas as etapas independentes; cada falha recebe seu proprio relatorio diario.
+
+Na primeira execucao desta versao, o Google tambem pedira permissao para criar os
+relatorios no Drive. Se o registro mencionar uma preparacao parcial, abra a pasta do
+dia indicado na mensagem.
 
 Se o app ainda mostrar **Faca uma selecao em uma coluna para realizar acoes no nivel
 da coluna**, a URL `/exec` ainda esta executando uma implantacao anterior. Crie uma
@@ -53,7 +86,7 @@ OAuth nesta primeira versao. O script rejeita requisicoes cujo token nao confere
 
 ## Configurar o Android
 
-1. Instale a versao 0.5.3 do Notifica Arquivo.
+1. Instale a versao 0.6.0 do Notifica Arquivo.
 2. Abra o painel **Google Sheets** e toque em **Configurar**.
 3. Cole a URL `/exec` da implantacao.
 4. Informe exatamente o token usado em `configurarToken`.

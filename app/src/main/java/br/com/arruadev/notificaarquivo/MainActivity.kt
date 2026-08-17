@@ -10,6 +10,7 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
@@ -44,10 +46,13 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -61,6 +66,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -329,6 +335,47 @@ private fun NotificationArchiveScreen(
     var showFiltersDialog by remember { mutableStateOf(false) }
     var showSyncDialog by remember { mutableStateOf(false) }
     var pendingIgnore by remember { mutableStateOf<CapturedNotification?>(null) }
+    var selectedCategory by remember { mutableStateOf<String?>(null) }
+    var unseenIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var knownIds by remember { mutableStateOf(notifications.mapTo(mutableSetOf()) { it.id }) }
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    val categories = notifications.map { it.category }.distinct().sorted()
+    val visibleNotifications = selectedCategory?.let { category ->
+        notifications.filter { it.category == category }
+    } ?: notifications
+
+    LaunchedEffect(notifications) {
+        val currentIds = notifications.mapTo(mutableSetOf()) { it.id }
+        val newIds = currentIds - knownIds
+        if (newIds.isNotEmpty()) {
+            val atTop = listState.firstVisibleItemIndex == 0 &&
+                listState.firstVisibleItemScrollOffset < 12
+            val visibleNewIds = notifications
+                .filter { it.id in newIds && (selectedCategory == null || it.category == selectedCategory) }
+                .mapTo(mutableSetOf()) { it.id }
+
+            if (atTop && visibleNewIds.isNotEmpty()) {
+                listState.scrollToItem(0)
+            }
+            unseenIds = if (atTop) {
+                (unseenIds + (newIds - visibleNewIds)).intersect(currentIds)
+            } else {
+                (unseenIds + newIds).intersect(currentIds)
+            }
+        } else {
+            unseenIds = unseenIds.intersect(currentIds)
+        }
+        knownIds = currentIds
+    }
+
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String }.toSet()
+        }.collectLatest { visibleIds ->
+            unseenIds = unseenIds - visibleIds
+        }
+    }
 
     if (showCaptureSettings) {
         CaptureSettingsScreen(
@@ -382,13 +429,25 @@ private fun NotificationArchiveScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = historySyncStatusText(historySyncStatus, notifications.size),
+                        text = historySyncStatusText(historySyncStatus, visibleNotifications.size),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp
                     )
                 }
+                if (unseenIds.isNotEmpty()) {
+                    UnseenBadge(
+                        count = unseenIds.size,
+                        onClick = {
+                            selectedCategory = null
+                            coroutineScope.launch { listState.animateScrollToItem(0) }
+                        }
+                    )
+                    Spacer(modifier = Modifier.size(4.dp))
+                }
                 TextButton(onClick = { showFiltersDialog = true }) {
-                    Text("Filtros (${ignoredApps.size + hiddenNotifications.size})")
+                    val activeFilters = ignoredApps.size + hiddenNotifications.size +
+                        if (selectedCategory == null) 0 else 1
+                    Text("Filtros ($activeFilters)")
                 }
                 Spacer(modifier = Modifier.size(6.dp))
                 TextButton(
@@ -407,15 +466,16 @@ private fun NotificationArchiveScreen(
                 }
             }
 
-            if (notifications.isEmpty()) {
+            if (visibleNotifications.isEmpty()) {
                 EmptyState(modifier = Modifier.weight(1f))
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(notifications, key = { it.id }) { notification ->
+                    items(visibleNotifications, key = { it.id }) { notification ->
                         NotificationItem(
                             notification = notification,
                             onDismiss = { onDismissNotification(notification) },
@@ -443,9 +503,15 @@ private fun NotificationArchiveScreen(
 
     if (showFiltersDialog) {
         FiltersDialog(
+            categories = categories,
+            selectedCategory = selectedCategory,
             ignoredApps = ignoredApps,
             hiddenNotifications = hiddenNotifications,
             onDismiss = { showFiltersDialog = false },
+            onSelectCategory = {
+                selectedCategory = it
+                showFiltersDialog = false
+            },
             onAllow = onAllowApp,
             onShow = onShowNotification
         )
@@ -459,6 +525,24 @@ private fun NotificationArchiveScreen(
                 showSyncDialog = false
                 onSaveSyncSettings(it)
             }
+        )
+    }
+}
+
+@Composable
+private fun UnseenBadge(count: Int, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(28.dp)
+            .background(MaterialTheme.colorScheme.primary, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = count.toString(),
+            color = MaterialTheme.colorScheme.onPrimary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
         )
     }
 }
@@ -788,12 +872,40 @@ private fun NotificationItem(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = if (notification.syncedAt == null) "Pendente" else "No Sheets",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 11.sp,
-                            modifier = Modifier.weight(1f)
-                        )
+                        if (notification.syncedAt == null) {
+                            Text(
+                                text = "Pendente",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp,
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .background(MaterialTheme.colorScheme.primary, CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "\u2713",
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.size(6.dp))
+                                Text(
+                                    text = "Na planilha",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
                         TextButton(onClick = onHide) {
                             Text("Ocultar")
                         }
@@ -823,9 +935,12 @@ private fun ConfirmationDialog(
 
 @Composable
 private fun FiltersDialog(
+    categories: List<String>,
+    selectedCategory: String?,
     ignoredApps: List<IgnoredApp>,
     hiddenNotifications: List<HiddenNotification>,
     onDismiss: () -> Unit,
+    onSelectCategory: (String?) -> Unit,
     onAllow: (String) -> Unit,
     onShow: (String) -> Unit
 ) {
@@ -833,14 +948,26 @@ private fun FiltersDialog(
         onDismissRequest = onDismiss,
         title = { Text("Filtros locais") },
         text = {
-            if (ignoredApps.isEmpty() && hiddenNotifications.isEmpty()) {
-                Text("Nenhum filtro local ativo.")
-            } else {
-                Column(
-                    modifier = Modifier
-                        .heightIn(max = 320.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text("Categoria do historico", fontWeight = FontWeight.Bold)
+                CategoryFilterRow(
+                    label = "Todas",
+                    selected = selectedCategory == null,
+                    onClick = { onSelectCategory(null) }
+                )
+                categories.forEach { category ->
+                    CategoryFilterRow(
+                        label = category,
+                        selected = selectedCategory == category,
+                        onClick = { onSelectCategory(category) }
+                    )
+                }
+                if (ignoredApps.isNotEmpty() || hiddenNotifications.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
                     if (ignoredApps.isNotEmpty()) {
                         Text("Apps ignorados", fontWeight = FontWeight.Bold)
                     }
@@ -881,6 +1008,29 @@ private fun FiltersDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar") } }
     )
+}
+
+@Composable
+private fun CategoryFilterRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = if (selected) "\u2713" else "",
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.size(24.dp)
+        )
+        Text(
+            text = label,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+        )
+    }
 }
 
 @Composable

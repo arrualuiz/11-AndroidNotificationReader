@@ -151,7 +151,13 @@ class NotificationCaptureService : NotificationListenerService() {
             appName = appNameFor(packageName),
             title = title.take(500),
             text = text.take(4_000),
-            postedAt = postTime
+            postedAt = postTime,
+            category = NotificationCategorizer.categoryFor(
+                packageName = packageName,
+                appName = appNameFor(packageName),
+                title = title,
+                text = text
+            )
         )
     }
 
