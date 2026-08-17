@@ -8,6 +8,14 @@
 - `Aplicativos`: resumo reconstruido pelo Apps Script depois de cada envio.
 - `Dashboard`: indicadores e graficos.
 - `Ajuda`: lembrete do fluxo e dos campos.
+- `Backup dados`: copia bruta criada antes de uma recuperacao de colunas.
+
+As tabelas visuais sao padronizadas em verde e recebem estes nomes:
+
+- `Notificacoes`: `TodasNotificacoes`.
+- `Categorias`: `CatalogoCategorias`.
+- `Aplicativos`: `ResumoAplicativos`.
+- `Financeiro`: `NotificacoesFinanceiras`.
 
 O `Code.gs` nao contem token, ID de planilha, ID de pasta ou nomes de abas. Toda a
 configuracao fica em **Configuracoes do projeto > Propriedades do script** no Apps Script.
@@ -17,8 +25,8 @@ Cadastre estas propriedades exatamente como abaixo:
 | Propriedade | Valor |
 | --- | --- |
 | `SYNC_TOKEN` | Um token novo, aleatorio e com pelo menos 32 caracteres |
-| `SPREADSHEET_ID` | `1Q-Ccl5UngOts5X0yCPJ04USDVjk6rCciCyynOlPrVN0` |
-| `DEBUG_PARENT_FOLDER_ID` | `11IqzFbgAlmLVLCoVdOAwwT49ssKlmqZ_` |
+| `SPREADSHEET_ID` | ID ou URL da planilha correta |
+| `DEBUG_PARENT_FOLDER_ID` | ID ou URL da pasta de debug no Drive |
 | `DEBUG_FOLDER_NAME` | `NotificaArquivo-Debug` |
 | `DEBUG_TIME_ZONE` | `America/Sao_Paulo` |
 | `SHEET_NOTIFICATIONS` | `Notificacoes` |
@@ -27,6 +35,7 @@ Cadastre estas propriedades exatamente como abaixo:
 | `SHEET_FINANCIAL` | `Financeiro` |
 | `SHEET_DASHBOARD` | `Dashboard` |
 | `SHEET_HELP` | `Ajuda` |
+| `SHEET_BACKUP` | `Backup dados` |
 
 O Apps Script nao carrega arquivos `.env`. As Script Properties cumprem esse papel no
 servidor e nao entram no Git. Nao coloque o valor de `SYNC_TOKEN` em `Code.gs`, README,
@@ -34,16 +43,21 @@ logs, commits ou capturas de tela.
 
 A ordem mantida automaticamente em `Notificacoes` e `Financeiro` e:
 
-`Recebido em`, `Aplicativo`, `Titulo`, `Texto`, `Categoria`, `ID`, `Sensivel?`,
-`Data notificacao`, `Pacote`, `Chave fonte`, `Device ID`.
+`Data notificacao`, `Categoria`, `Titulo`, `Texto`, `Aplicativo`, `ID`,
+`Recebido em`, `Sensivel?`, `Pacote`, `Chave fonte`, `Device ID`.
 
 Na aba `Categorias`, use:
 
 - `Pacote`: identificador tecnico, como `com.whatsapp`.
 - `Aplicativo`: nome apenas para leitura.
 - `Categoria`: Financeiro, Mensagens, Trabalho, Sistema etc.
-- `Incluir?`: `TRUE` para gravar; `FALSE` para descartar no servidor.
-- `Sensivel?`: marque `TRUE` para bancos, autenticadores ou conteudo privado.
+- `Incluir?`: `TRUE` aceita as proximas notificacoes do pacote. `FALSE` descarta as
+  proximas no servidor. Apagar ou ocultar uma notificacao no celular nao muda esta
+  regra e nao remove linhas antigas da planilha.
+- `Sensivel?`: etiqueta de privacidade para bancos, autenticadores, codigos e conteudo
+  pessoal. Nao apaga, nao esconde e nao criptografa a linha. Ela alimenta o indicador
+  do Dashboard e permite ocultar conteudo privado em interfaces futuras. Registros
+  financeiros sao marcados automaticamente.
 
 ## Preparar a planilha
 
@@ -52,9 +66,13 @@ Na aba `Categorias`, use:
 3. Apague o codigo inicial e cole todo o conteudo de `Code.gs`.
 4. Cadastre todas as Script Properties da tabela acima.
 5. Salve e execute `diagnosticarConfiguracao`.
-6. Execute `prepararPlanilha` uma vez. Ela migra as colunas existentes pelo nome do
-   cabecalho antes de reorganiza-las.
-7. Para retirar os dados demonstrativos, execute `limparExemplos`.
+6. Se a planilha recebeu linhas em ordens diferentes, execute primeiro
+   `recuperarDadosMisturados`. Ela cria `Backup dados`, reconhece os formatos antigo e
+   novo linha por linha, remove duplicatas por `ID` e reconstrui os indicadores.
+7. Execute `prepararPlanilha` uma vez. Ela confirma a estrutura e atualiza os resumos.
+8. Execute `configurarTabelas` para confirmar os nomes e a aparencia verde. O Google
+   pode solicitar uma nova autorizacao para acessar a API do Sheets.
+9. Para retirar os dados demonstrativos, execute `limparExemplos`.
 
 ## Publicar o endpoint
 
@@ -68,8 +86,9 @@ Ao substituir o `Code.gs` por uma versao mais nova, abra **Implantar > Gerenciar
 implantacoes**, edite a implantacao, escolha **Nova versao** e confirme. Apenas salvar
 o codigo nao atualiza a URL `/exec` que o Android esta usando.
 
-Na versao 0.6.0 do script, execute tambem `configurarAtualizacaoAutomatica` uma vez pelo editor.
-Ela cria um acionador que atualiza a aba `Aplicativos` a cada 15 minutos. Essa tarefa
+Na versao 0.6.2 do script, execute tambem `configurarAtualizacaoAutomatica` uma vez pelo editor.
+Ela cria um acionador que atualiza `Categorias`, `Financeiro`, `Aplicativos` e `Dashboard`
+a cada 15 minutos. Essa tarefa
 fica separada do recebimento bruto: mesmo que o resumo tenha algum problema, a aba
 `Notificacoes` confirma o lote ao Android.
 
@@ -127,6 +146,8 @@ apaga linhas que ja estejam no Google Sheets.
 - O trabalho exige conexao de rede. Sem internet, os registros ficam pendentes.
 - O agendamento sobrevive ao fechamento do app e a reinicializacao do aparelho.
 - O Android escolhe o instante real da execucao para preservar bateria.
+- O cabo USB e o computador nao participam do envio. Depois de instalar e configurar,
+  o celular pode ser desconectado e envia diretamente pela internet.
 
 No Xiaomi/MIUI, abra as configuracoes do **Notifica Arquivo**, ative **Inicio
 automatico** e selecione **Sem restricoes** na economia de bateria. Dentro do app,

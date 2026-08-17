@@ -13,7 +13,22 @@ const PROPERTY_KEYS = Object.freeze({
   backupSheet: 'SHEET_BACKUP',
 });
 
-const API_VERSION = '0.6.1';
+const API_VERSION = '0.6.2';
+
+const TABLE_NAMES = Object.freeze({
+  notifications: 'TodasNotificacoes',
+  categories: 'CatalogoCategorias',
+  applications: 'ResumoAplicativos',
+  financial: 'NotificacoesFinanceiras',
+});
+
+const GREEN_TABLE_COLORS = Object.freeze({
+  header: '#147A67',
+  firstBand: '#E3F3EA',
+  secondBand: '#FFFFFF',
+  border: '#B7D8C8',
+  text: '#18312B',
+});
 
 const NOTIFICATION_HEADERS = [
   'Data notificacao',
@@ -105,6 +120,7 @@ function prepararPlanilha() {
     ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet, config)],
     ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet, config)],
     ['reconstruir-Dashboard', () => rebuildDashboard_(spreadsheet, config)],
+    ['padronizar-tabelas', () => configureTables_(spreadsheet, config)],
   ]);
   return `Planilha preparada: ${spreadsheet.getName()} (${spreadsheet.getId()})`;
 }
@@ -135,6 +151,16 @@ function atualizarResumos() {
     ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet, config)],
     ['reconstruir-Dashboard', () => rebuildDashboard_(spreadsheet, config)],
   ]);
+}
+
+function configurarTabelas() {
+  return runWithDebug_('configurarTabelas', () => {
+    const config = configuredProperties_();
+    const spreadsheet = configuredSpreadsheet_(config);
+    const result = configureTables_(spreadsheet, config);
+    console.log(JSON.stringify(result, null, 2));
+    return JSON.stringify(result);
+  });
 }
 
 /**
@@ -609,32 +635,270 @@ function rebuildDashboard_(spreadsheet, config) {
   const applicationRows = Array.from(applications.values())
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 
-  target.getRange('A1').setValue('Notifica Arquivo - Dashboard');
-  target.getRange('A2').setValue('Resumo dos dados recebidos do Android. A aba de backup nao entra nos indicadores.');
-  target.getRange('A4').setValue('Total');
-  target.getRange('C4').setValue('Hoje');
-  target.getRange('E4').setValue('Aplicativos');
-  target.getRange('G4').setValue('Sensiveis');
-  target.getRange('A5').setValue(rows.length);
-  target.getRange('C5').setValue(receivedToday);
-  target.getRange('E5').setValue(applications.size);
-  target.getRange('G5').setValue(sensitiveCount);
+  const clearRows = Math.max(target.getLastRow(), 30);
+  target.getRange(1, 1, clearRows, 8).breakApart().clear();
+  target.setHiddenGridlines(true);
+  target.setFrozenRows(2);
+  target.getRange(1, 1, clearRows, 8).setFontFamily('Arial').setFontColor('#18312B');
 
-  const previousRows = Math.max(1, target.getLastRow() - 7);
-  const writeCount = Math.max(previousRows, categoryNames.length + 1, applicationRows.length + 1);
-  const matrix = Array.from({ length: writeCount }, (_, index) => {
-    if (index === 0) return ['Categoria', 'Quantidade', '', 'Aplicativo', 'Quantidade'];
-    const category = categoryNames[index - 1];
-    const application = applicationRows[index - 1];
-    return [
-      category || '',
-      category ? categories.get(category) || 0 : '',
-      '',
-      application ? application.name : '',
-      application ? application.count : '',
-    ];
+  target.getRange('A1:H1')
+    .merge()
+    .setValue('Notifica Arquivo - Dashboard')
+    .setBackground('#17372F')
+    .setFontColor('#FFFFFF')
+    .setFontSize(18)
+    .setFontWeight('bold')
+    .setVerticalAlignment('middle');
+  target.setRowHeight(1, 42);
+
+  const updatedAt = Utilities.formatDate(new Date(), config.debugTimeZone, 'dd/MM/yyyy HH:mm');
+  target.getRange('A2:H2')
+    .merge()
+    .setValue(`Atualizado em ${updatedAt}. O backup nao entra nos indicadores.`)
+    .setBackground('#EDF6F1')
+    .setFontColor('#49635B')
+    .setFontSize(10)
+    .setFontStyle('italic')
+    .setVerticalAlignment('middle');
+  target.setRowHeight(2, 28);
+
+  const metrics = [
+    { columns: 'A:B', label: 'Total de notificacoes', value: rows.length, color: '#DDEFE7' },
+    { columns: 'C:D', label: 'Recebidas hoje', value: receivedToday, color: '#E8F1F6' },
+    { columns: 'E:F', label: 'Aplicativos', value: applications.size, color: '#EAEDEB' },
+    { columns: 'G:H', label: 'Conteudos sensiveis', value: sensitiveCount, color: '#F8E5E3' },
+  ];
+  metrics.forEach((metric) => {
+    target.getRange(`${metric.columns.split(':')[0]}4:${metric.columns.split(':')[1]}4`)
+      .merge()
+      .setValue(metric.label)
+      .setBackground(metric.color)
+      .setFontWeight('bold')
+      .setFontSize(10)
+      .setHorizontalAlignment('center');
+    target.getRange(`${metric.columns.split(':')[0]}5:${metric.columns.split(':')[1]}6`)
+      .merge()
+      .setValue(metric.value)
+      .setBackground(metric.color)
+      .setFontWeight('bold')
+      .setFontSize(24)
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle');
   });
-  target.getRange(8, 1, matrix.length, matrix[0].length).setValues(matrix);
+
+  target.getRange('A8:B8')
+    .merge()
+    .setValue('Notificacoes por categoria')
+    .setBackground(GREEN_TABLE_COLORS.header)
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold');
+  target.getRange('D8:E8')
+    .merge()
+    .setValue('Aplicativos com mais notificacoes')
+    .setBackground(GREEN_TABLE_COLORS.header)
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold');
+  target.getRange('A9:B9').setValues([['Categoria', 'Quantidade']]);
+  target.getRange('D9:E9').setValues([['Aplicativo', 'Quantidade']]);
+  target.getRange('A9:B9').setBackground('#CFE7DB').setFontWeight('bold');
+  target.getRange('D9:E9').setBackground('#CFE7DB').setFontWeight('bold');
+
+  const detailCount = Math.max(categoryNames.length, applicationRows.length, 1);
+  const categoryMatrix = Array.from({ length: detailCount }, (_, index) => {
+    const category = categoryNames[index];
+    return [category || '', category ? categories.get(category) || 0 : ''];
+  });
+  const applicationMatrix = Array.from({ length: detailCount }, (_, index) => {
+    const application = applicationRows[index];
+    return [application ? application.name : '', application ? application.count : ''];
+  });
+  target.getRange(10, 1, detailCount, 2).setValues(categoryMatrix);
+  target.getRange(10, 4, detailCount, 2).setValues(applicationMatrix);
+  applyAlternatingBackgrounds_(target.getRange(10, 1, detailCount, 2));
+  applyAlternatingBackgrounds_(target.getRange(10, 4, detailCount, 2));
+  target.getRange(8, 1, detailCount + 2, 2).setBorder(true, true, true, true, true, true, '#B7D8C8', SpreadsheetApp.BorderStyle.SOLID);
+  target.getRange(8, 4, detailCount + 2, 2).setBorder(true, true, true, true, true, true, '#B7D8C8', SpreadsheetApp.BorderStyle.SOLID);
+
+  [155, 95, 28, 220, 95, 28, 140, 140].forEach((width, index) => {
+    target.setColumnWidth(index + 1, width);
+  });
+  target.getRange(1, 1, detailCount + 9, 8).setVerticalAlignment('middle');
+}
+
+function configureTables_(spreadsheet, config) {
+  const definitions = [
+    {
+      sheetName: config.sheets.notifications,
+      tableName: TABLE_NAMES.notifications,
+      columnCount: NOTIFICATION_HEADERS.length,
+      widths: [150, 120, 220, 360, 170, 320, 150, 95, 230, 320, 260],
+    },
+    {
+      sheetName: config.sheets.categories,
+      tableName: TABLE_NAMES.categories,
+      columnCount: CATEGORY_HEADERS.length,
+      widths: [250, 190, 145, 95, 110],
+    },
+    {
+      sheetName: config.sheets.applications,
+      tableName: TABLE_NAMES.applications,
+      columnCount: APPLICATION_HEADERS.length,
+      widths: [250, 190, 145, 105, 160, 160, 110],
+    },
+    {
+      sheetName: config.sheets.financial,
+      tableName: TABLE_NAMES.financial,
+      columnCount: FINANCIAL_HEADERS.length,
+      widths: [150, 120, 220, 360, 170, 320, 150, 95, 230, 320, 260],
+    },
+  ];
+
+  definitions.forEach((definition) => {
+    const sheet = spreadsheet.getSheetByName(definition.sheetName);
+    if (!sheet) throw new Error(`Aba ${definition.sheetName} nao encontrada.`);
+    applyGreenSheetStyle_(sheet, definition.columnCount, definition.widths);
+    definition.sheetId = sheet.getSheetId();
+    definition.rowCount = Math.max(sheet.getLastRow(), 2);
+  });
+
+  const categoriesSheet = spreadsheet.getSheetByName(config.sheets.categories);
+  const categoryRuleRows = Math.max(categoriesSheet.getLastRow() - 1, 1);
+  const checkboxRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  categoriesSheet.getRange(2, 4, categoryRuleRows, 2).setDataValidation(checkboxRule);
+  categoriesSheet.getRange('D1').setNote(
+    'TRUE aceita novas notificacoes deste pacote. FALSE descarta apenas as proximas no servidor.'
+  );
+  categoriesSheet.getRange('E1').setNote(
+    'Marca conteudo privado. Nao apaga nem criptografa a notificacao.'
+  );
+  spreadsheet.getSheetByName(config.sheets.notifications).getRange('H1').setNote(
+    'TRUE indica conteudo privado e entra no indicador de sensiveis do Dashboard.'
+  );
+
+  const tableResult = syncNativeTables_(spreadsheet, definitions);
+  return {
+    ok: true,
+    apiVersion: API_VERSION,
+    tables: tableResult,
+  };
+}
+
+function applyGreenSheetStyle_(sheet, columnCount, widths) {
+  const rowCount = Math.max(sheet.getLastRow(), 2);
+  const bodyRowCount = Math.max(rowCount - 1, 1);
+  sheet.setFrozenRows(1);
+  sheet.getRange(1, 1, 1, columnCount)
+    .setBackground(GREEN_TABLE_COLORS.header)
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('left')
+    .setVerticalAlignment('middle');
+  sheet.setRowHeight(1, 34);
+  sheet.getRange(2, 1, bodyRowCount, columnCount)
+    .setFontColor(GREEN_TABLE_COLORS.text)
+    .setVerticalAlignment('middle')
+    .setWrap(false);
+  applyAlternatingBackgrounds_(sheet.getRange(2, 1, bodyRowCount, columnCount));
+  sheet.getRange(1, 1, rowCount, columnCount)
+    .setBorder(true, true, true, true, true, true, GREEN_TABLE_COLORS.border, SpreadsheetApp.BorderStyle.SOLID);
+  widths.forEach((width, index) => sheet.setColumnWidth(index + 1, width));
+}
+
+function applyAlternatingBackgrounds_(range) {
+  const colors = Array.from({ length: range.getNumRows() }, (_, rowIndex) =>
+    Array(range.getNumColumns()).fill(
+      rowIndex % 2 === 0 ? GREEN_TABLE_COLORS.firstBand : GREEN_TABLE_COLORS.secondBand
+    )
+  );
+  range.setBackgrounds(colors);
+}
+
+function syncNativeTables_(spreadsheet, definitions) {
+  const spreadsheetId = spreadsheet.getId();
+  const fields = encodeURIComponent('sheets(properties(sheetId,title),tables(tableId,name,range))');
+  const metadata = sheetsApiRequest_(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=${fields}`,
+    'get'
+  );
+  const sheetResources = metadata.sheets || [];
+  const requests = [];
+  const results = [];
+
+  definitions.forEach((definition) => {
+    const resource = sheetResources.find((item) => item.properties?.sheetId === definition.sheetId);
+    if (!resource) throw new Error(`Aba ${definition.sheetName} nao retornada pela API do Sheets.`);
+    const tables = resource.tables || [];
+    const table = tables.find((item) => item.name === definition.tableName) || tables[0];
+    const tableDefinition = {
+      name: definition.tableName,
+      range: {
+        sheetId: definition.sheetId,
+        startRowIndex: 0,
+        endRowIndex: definition.rowCount,
+        startColumnIndex: 0,
+        endColumnIndex: definition.columnCount,
+      },
+      rowsProperties: greenTableRowsProperties_(),
+    };
+
+    if (table) {
+      requests.push({
+        updateTable: {
+          table: { ...tableDefinition, tableId: table.tableId },
+          fields: 'name,range,rowsProperties',
+        },
+      });
+      results.push({ sheet: definition.sheetName, name: definition.tableName, action: 'updated' });
+    } else {
+      requests.push({ addTable: { table: tableDefinition } });
+      results.push({ sheet: definition.sheetName, name: definition.tableName, action: 'created' });
+    }
+  });
+
+  if (requests.length > 0) {
+    sheetsApiRequest_(
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`,
+      'post',
+      { requests }
+    );
+  }
+  return results;
+}
+
+function greenTableRowsProperties_() {
+  return {
+    headerColorStyle: { rgbColor: rgbColorFromHex_(GREEN_TABLE_COLORS.header) },
+    firstBandColorStyle: { rgbColor: rgbColorFromHex_(GREEN_TABLE_COLORS.firstBand) },
+    secondBandColorStyle: { rgbColor: rgbColorFromHex_(GREEN_TABLE_COLORS.secondBand) },
+  };
+}
+
+function rgbColorFromHex_(hex) {
+  const value = String(hex || '').replace('#', '');
+  return {
+    red: parseInt(value.slice(0, 2), 16) / 255,
+    green: parseInt(value.slice(2, 4), 16) / 255,
+    blue: parseInt(value.slice(4, 6), 16) / 255,
+  };
+}
+
+function sheetsApiRequest_(url, method, payload) {
+  const options = {
+    method,
+    headers: { Authorization: `Bearer ${ScriptApp.getOAuthToken()}` },
+    muteHttpExceptions: true,
+  };
+  if (payload) {
+    options.contentType = 'application/json';
+    options.payload = JSON.stringify(payload);
+  }
+  const response = UrlFetchApp.fetch(url, options);
+  const status = response.getResponseCode();
+  const body = response.getContentText();
+  if (status < 200 || status >= 300) {
+    throw new Error(`Google Sheets API respondeu ${status}: ${clean_(body, 700)}`);
+  }
+  return body ? JSON.parse(body) : {};
 }
 
 function ensureSheet_(spreadsheet, name, headers) {
