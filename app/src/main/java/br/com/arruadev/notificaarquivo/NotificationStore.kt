@@ -82,6 +82,18 @@ object NotificationStore {
     }
 
     @Synchronized
+    fun remove(context: Context, id: String) {
+        writeNotifications(context, readInternal(context).filterNot { it.id == id })
+        notifyChanged(context)
+    }
+
+    @Synchronized
+    fun clearSynced(context: Context) {
+        writeNotifications(context, readInternal(context).filter { it.syncedAt == null })
+        notifyChanged(context)
+    }
+
+    @Synchronized
     fun ignorePackage(context: Context, packageName: String, appName: String) {
         val apps = ignoredApps(context)
             .filterNot { it.packageName == packageName }

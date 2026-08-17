@@ -97,7 +97,8 @@ class MainActivity : ComponentActivity() {
                     syncStatus = syncStatus,
                     onOpenSettings = ::openNotificationAccessSettings,
                     onOpenBatterySettings = ::openBatterySettings,
-                    onClear = { NotificationStore.clear(this) },
+                    onHideSynced = { NotificationStore.clearSynced(this) },
+                    onHideNotification = { id -> NotificationStore.remove(this, id) },
                     onIgnoreApp = { packageName, appName ->
                         NotificationStore.ignorePackage(this, packageName, appName)
                     },
@@ -209,16 +210,18 @@ private fun NotificationArchiveScreen(
     syncStatus: SyncStatus,
     onOpenSettings: () -> Unit,
     onOpenBatterySettings: () -> Unit,
-    onClear: () -> Unit,
+    onHideSynced: () -> Unit,
+    onHideNotification: (String) -> Unit,
     onIgnoreApp: (String, String) -> Unit,
     onAllowApp: (String) -> Unit,
     onSaveSyncSettings: (SheetsSyncSettings) -> Unit,
     onSync: () -> Unit
 ) {
-    var showClearDialog by remember { mutableStateOf(false) }
+    var showHideSyncedDialog by remember { mutableStateOf(false) }
     var showFiltersDialog by remember { mutableStateOf(false) }
     var showSyncDialog by remember { mutableStateOf(false) }
     var pendingIgnore by remember { mutableStateOf<CapturedNotification?>(null) }
+    val syncedCount = notifications.count { it.syncedAt != null }
 
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp)) {
@@ -269,10 +272,10 @@ private fun NotificationArchiveScreen(
                     Text("Filtros (${ignoredApps.size})")
                 }
                 TextButton(
-                    onClick = { showClearDialog = true },
-                    enabled = notifications.isNotEmpty()
+                    onClick = { showHideSyncedDialog = true },
+                    enabled = syncedCount > 0
                 ) {
-                    Text("Limpar")
+                    Text("Ocultar ($syncedCount)")
                 }
             }
 
@@ -287,6 +290,7 @@ private fun NotificationArchiveScreen(
                     items(notifications, key = { it.id }) { notification ->
                         NotificationItem(
                             notification = notification,
+                            onHide = { onHideNotification(notification.id) },
                             onIgnore = { pendingIgnore = notification }
                         )
                     }
@@ -295,15 +299,15 @@ private fun NotificationArchiveScreen(
         }
     }
 
-    if (showClearDialog) {
+    if (showHideSyncedDialog) {
         ConfirmationDialog(
-            title = "Limpar historico?",
-            message = "Os registros locais serao apagados. Dados ja enviados ao Sheets permanecem la.",
-            confirmLabel = "Limpar",
-            onDismiss = { showClearDialog = false },
+            title = "Ocultar itens enviados?",
+            message = "$syncedCount registros serao removidos somente deste aparelho. Eles continuam no Google Sheets.",
+            confirmLabel = "Ocultar",
+            onDismiss = { showHideSyncedDialog = false },
             onConfirm = {
-                showClearDialog = false
-                onClear()
+                showHideSyncedDialog = false
+                onHideSynced()
             }
         )
     }
@@ -443,7 +447,10 @@ private fun syncStatusText(
         metadata.lastError.isNotBlank() ->
             "Automatico ativo; $pendingCount pendentes. Falha: ${metadata.lastError}"
         pendingCount > 0 -> "Automatico ativo; $pendingCount aguardando envio."
-        metadata.lastSuccessAt > 0 -> "Automatico ativo; sincronizado em ${formatTimestamp(metadata.lastSuccessAt)}."
+        metadata.lastSuccessAt > 0 -> {
+            val server = metadata.serverVersion.ifBlank { "anterior" }
+            "Automatico ativo; sincronizado em ${formatTimestamp(metadata.lastSuccessAt)} (servidor $server)."
+        }
         else -> "Automatico ativo; aguardando notificacoes."
     }
     SyncStatus.Running -> "Enviando notificacoes..."
@@ -471,7 +478,11 @@ private fun EmptyState(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun NotificationItem(notification: CapturedNotification, onIgnore: () -> Unit) {
+private fun NotificationItem(
+    notification: CapturedNotification,
+    onHide: () -> Unit,
+    onIgnore: () -> Unit
+) {
     Card(
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -508,6 +519,11 @@ private fun NotificationItem(notification: CapturedNotification, onIgnore: () ->
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f)
                 )
+                if (notification.syncedAt != null) {
+                    TextButton(onClick = onHide) {
+                        Text("Ocultar")
+                    }
+                }
                 TextButton(onClick = onIgnore) {
                     Text("Ignorar app")
                 }

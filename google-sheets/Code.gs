@@ -5,6 +5,8 @@ const SHEETS = {
   dashboard: 'Dashboard',
 };
 
+const API_VERSION = '0.4.0';
+
 const NOTIFICATION_HEADERS = [
   'ID',
   'Device ID',
@@ -50,6 +52,25 @@ function prepararPlanilha() {
   rebuildApplications_();
 }
 
+/**
+ * Execute uma vez para atualizar as abas de resumo fora do recebimento do Android.
+ */
+function configurarAtualizacaoAutomatica() {
+  ScriptApp.getProjectTriggers()
+    .filter((trigger) => trigger.getHandlerFunction() === 'atualizarResumos')
+    .forEach((trigger) => ScriptApp.deleteTrigger(trigger));
+
+  ScriptApp.newTrigger('atualizarResumos')
+    .timeBased()
+    .everyMinutes(15)
+    .create();
+}
+
+function atualizarResumos() {
+  rebuildApplications_();
+  SpreadsheetApp.flush();
+}
+
 function doPost(event) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) return json_({ ok: false, error: 'Planilha ocupada. Tente novamente.' });
@@ -62,9 +83,14 @@ function doPost(event) {
     }
 
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ensureSheet_(spreadsheet, SHEETS.notifications, NOTIFICATION_HEADERS);
-    ensureSheet_(spreadsheet, SHEETS.categories, CATEGORY_HEADERS);
-    ensureSheet_(spreadsheet, SHEETS.applications, APPLICATION_HEADERS);
+    const sheet = spreadsheet.getSheetByName(SHEETS.notifications);
+    if (!sheet) {
+      return json_({
+        ok: false,
+        apiVersion: API_VERSION,
+        error: 'Aba Notificacoes nao encontrada. Execute prepararPlanilha uma vez.',
+      });
+    }
     const rules = readCategoryRules_(spreadsheet);
     const existingIds = readExistingIds_(sheet);
     const notifications = Array.isArray(payload.notifications) ? payload.notifications : [];
@@ -104,23 +130,23 @@ function doPost(event) {
 
     if (rows.length > 0) {
       sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, NOTIFICATION_HEADERS.length).setValues(rows);
-      sheet.getRange(2, 8, sheet.getLastRow() - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
-      sheet.getRange(2, 11, sheet.getLastRow() - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+      try {
+        sheet.getRange(sheet.getLastRow() - rows.length + 1, 8, rows.length, 1)
+          .setNumberFormat('yyyy-mm-dd hh:mm:ss');
+        sheet.getRange(sheet.getLastRow() - rows.length + 1, 11, rows.length, 1)
+          .setNumberFormat('yyyy-mm-dd hh:mm:ss');
+      } catch (formatError) {
+        // A formatacao e cosmetica e nunca deve impedir a confirmacao do lote.
+      }
     }
 
-    let summaryWarning = '';
-    try {
-      rebuildApplications_();
-    } catch (summaryError) {
-      summaryWarning = String(summaryError.message || summaryError);
-    }
     SpreadsheetApp.flush();
     return json_({
       ok: true,
+      apiVersion: API_VERSION,
       inserted: rows.length,
       duplicates,
       ignored,
-      summaryWarning,
     });
   } catch (error) {
     return json_({ ok: false, error: String(error.message || error) });

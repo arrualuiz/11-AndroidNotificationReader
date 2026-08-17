@@ -18,7 +18,8 @@ data class SheetsSyncSettings(
 data class SheetsSyncResult(
     val inserted: Int,
     val duplicates: Int,
-    val ignored: Int
+    val ignored: Int,
+    val serverVersion: String
 )
 
 data class SheetsSyncMetadata(
@@ -27,6 +28,7 @@ data class SheetsSyncMetadata(
     val lastInserted: Int = 0,
     val lastDuplicates: Int = 0,
     val lastIgnored: Int = 0,
+    val serverVersion: String = "",
     val lastError: String = ""
 )
 
@@ -76,6 +78,7 @@ object SheetsSyncMetadataStore {
     private const val LAST_INSERTED_KEY = "last_inserted"
     private const val LAST_DUPLICATES_KEY = "last_duplicates"
     private const val LAST_IGNORED_KEY = "last_ignored"
+    private const val SERVER_VERSION_KEY = "server_version"
     private const val LAST_ERROR_KEY = "last_error"
 
     fun read(context: Context): SheetsSyncMetadata {
@@ -86,6 +89,7 @@ object SheetsSyncMetadataStore {
             lastInserted = preferences.getInt(LAST_INSERTED_KEY, 0),
             lastDuplicates = preferences.getInt(LAST_DUPLICATES_KEY, 0),
             lastIgnored = preferences.getInt(LAST_IGNORED_KEY, 0),
+            serverVersion = preferences.getString(SERVER_VERSION_KEY, "").orEmpty(),
             lastError = preferences.getString(LAST_ERROR_KEY, "").orEmpty()
         )
     }
@@ -105,6 +109,7 @@ object SheetsSyncMetadataStore {
             .putInt(LAST_INSERTED_KEY, result.inserted)
             .putInt(LAST_DUPLICATES_KEY, result.duplicates)
             .putInt(LAST_IGNORED_KEY, result.ignored)
+            .putString(SERVER_VERSION_KEY, result.serverVersion)
             .putString(LAST_ERROR_KEY, "")
             .apply()
         notifyChanged(context)
@@ -192,7 +197,8 @@ object SheetsSyncClient {
             SheetsSyncResult(
                 inserted = response.optInt("inserted"),
                 duplicates = response.optInt("duplicates"),
-                ignored = response.optInt("ignored")
+                ignored = response.optInt("ignored"),
+                serverVersion = response.optString("apiVersion", "anterior")
             )
         } finally {
             connection.disconnect()
