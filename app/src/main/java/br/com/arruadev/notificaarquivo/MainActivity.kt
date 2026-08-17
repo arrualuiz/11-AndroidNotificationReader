@@ -1048,7 +1048,7 @@ private fun SyncSettingsDialog(
         title = { Text("Conectar ao Sheets") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Cole a URL da implantacao do Apps Script e o token definido no script.")
+                Text("Cole a URL da implantacao e o token salvo nas Script Properties.")
                 OutlinedTextField(
                     value = endpoint,
                     onValueChange = { endpoint = it },

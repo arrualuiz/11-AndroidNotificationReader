@@ -8,9 +8,10 @@ Projeto inicial Android em Kotlin e Jetpack Compose. Esta primeira versao:
 - Guarda ate 2.000 itens localmente no aparelho.
 - Mostra o historico quando o aplicativo e reaberto.
 
-A versao 0.6.0 tambem consolida notificacoes identicas, atualiza a tela ao vivo,
+A versao 0.7.0 tambem consolida notificacoes identicas, atualiza a tela ao vivo,
 permite ocultar itens enviados, ignorar aplicativos repetitivos e sincroniza os registros
 automaticamente com um Google Sheets por meio de um endpoint do Apps Script.
+O token de sincronizacao e criptografado no aparelho com uma chave do Android Keystore.
 
 O historico mostra um check nos itens confirmados pelo Sheets, conta notificacoes ainda
 nao vistas quando a lista esta rolada e permite filtrar por categorias locais.
@@ -90,8 +91,8 @@ Depois de implantar o Apps Script como Aplicativo da Web, copie a URL `/exec` e 
 token para o painel **Google Sheets > Configurar** do aplicativo. Ao salvar, o envio
 automatico e ativado; IDs existentes nao sao duplicados.
 
-O destino do servidor e definido por `SPREADSHEET_URL` e pelos nomes em `SHEETS` no
-inicio de `google-sheets/Code.gs`, sem depender da planilha ativa.
+O token, o ID da planilha, a pasta de debug e os nomes das abas ficam nas Script
+Properties do Apps Script. Nenhum desses valores precisa ser gravado no codigo.
 Erros do Apps Script sao salvos apenas quando acontecem, em uma subpasta diaria de
 `NotificaArquivo-Debug` no Google Drive, sem copiar token ou conteudo de notificacoes.
 
