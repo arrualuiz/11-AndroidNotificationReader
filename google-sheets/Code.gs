@@ -12,7 +12,7 @@ const SHEETS = {
   help: 'Ajuda',
 };
 
-const API_VERSION = '0.5.2';
+const API_VERSION = '0.5.5';
 
 const NOTIFICATION_HEADERS = [
   'ID',
@@ -64,7 +64,6 @@ function prepararPlanilha() {
     ['categorizar-historico', () => updateNotificationCategories_(spreadsheet)],
     ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet)],
     ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet)],
-    ['confirmar-alteracoes', () => SpreadsheetApp.flush()],
   ]);
   return `Planilha preparada: ${spreadsheet.getName()} (${spreadsheet.getId()})`;
 }
@@ -92,7 +91,6 @@ function atualizarResumos() {
     ['categorizar-historico', () => updateNotificationCategories_(spreadsheet)],
     ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet)],
     ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet)],
-    ['confirmar-alteracoes', () => SpreadsheetApp.flush()],
   ]);
 }
 
@@ -111,6 +109,14 @@ function diagnosticarConfiguracao() {
     };
     console.log(JSON.stringify(result, null, 2));
     return JSON.stringify(result);
+  });
+}
+
+function doGet() {
+  return json_({
+    ok: true,
+    apiVersion: API_VERSION,
+    message: 'Endpoint ativo. O aplicativo envia notificacoes por POST.',
   });
 }
 
@@ -183,29 +189,12 @@ function doPost(event) {
 
     if (rows.length > 0) {
       sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, NOTIFICATION_HEADERS.length).setValues(rows);
-      try {
-        sheet.getRange(sheet.getLastRow() - rows.length + 1, 8, rows.length, 1)
-          .setNumberFormat('yyyy-mm-dd hh:mm:ss');
-        sheet.getRange(sheet.getLastRow() - rows.length + 1, 11, rows.length, 1)
-          .setNumberFormat('yyyy-mm-dd hh:mm:ss');
-      } catch (formatError) {
-        writeErrorReport_('doPost/formatar-Notificacoes', formatError, {
-          deviceId: clean_(payload.deviceId, 300),
-          rowCount: rows.length,
-        });
-      }
-
       const financialRows = rows.filter((row) => isFinancialRow_(row));
       if (financialRows.length > 0) {
         try {
           financialSheet
             .getRange(financialSheet.getLastRow() + 1, 1, financialRows.length, FINANCIAL_HEADERS.length)
             .setValues(financialRows);
-          formatNotificationDates_(
-            financialSheet,
-            financialSheet.getLastRow() - financialRows.length + 1,
-            financialRows.length
-          );
         } catch (financialError) {
           writeErrorReport_('doPost/atualizar-Financeiro', financialError, {
             deviceId: clean_(payload.deviceId, 300),
@@ -357,9 +346,6 @@ function rebuildFinancial_(spreadsheet) {
     : [];
 
   replaceDataRows_(target, FINANCIAL_HEADERS.length, rows);
-  if (rows.length > 0) {
-    formatNotificationDates_(target, 2, rows.length);
-  }
 }
 
 function isFinancialRow_(row) {
@@ -415,12 +401,6 @@ function containsAny_(source, values) {
   return values.some((value) => source.includes(value));
 }
 
-function formatNotificationDates_(sheet, startRow, rowCount) {
-  if (rowCount < 1) return;
-  sheet.getRange(startRow, 8, rowCount, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
-  sheet.getRange(startRow, 11, rowCount, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
-}
-
 function readExistingIds_(sheet) {
   if (sheet.getLastRow() < 2) return new Set();
   return new Set(
@@ -469,9 +449,6 @@ function rebuildApplications_(spreadsheet = configuredSpreadsheet_()) {
     ]);
 
   replaceDataRows_(target, APPLICATION_HEADERS.length, rows);
-  if (rows.length > 0) {
-    target.getRange(2, 5, rows.length, 2).setNumberFormat('yyyy-mm-dd hh:mm:ss');
-  }
 }
 
 function ensureSheet_(spreadsheet, name, headers) {
@@ -503,6 +480,7 @@ function runStepsWithDebug_(operation, steps) {
   steps.forEach(([step, action]) => {
     try {
       action();
+      SpreadsheetApp.flush();
     } catch (error) {
       const debug = writeErrorReport_(`${operation}/${step}`, error, { step });
       failures.push(`${step}: ${String(error.message || error)} (${debug.path})`);
