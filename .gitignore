@@ -5,3 +5,13 @@ local.properties
 build/
 app/build/
 *.iml
+*.apk
+*.aab
+*.jks
+*.keystore
+*.log
+google-services.json
+secrets.properties
+captures/
+.externalNativeBuild/
+.cxx/
