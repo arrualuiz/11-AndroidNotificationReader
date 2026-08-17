@@ -53,7 +53,7 @@ OAuth nesta primeira versao. O script rejeita requisicoes cujo token nao confere
 
 ## Configurar o Android
 
-1. Instale a versao 0.4.0 do Notifica Arquivo.
+1. Instale a versao 0.5.0 do Notifica Arquivo.
 2. Abra o painel **Google Sheets** e toque em **Configurar**.
 3. Cole a URL `/exec` da implantacao.
 4. Informe exatamente o token usado em `configurarToken`.
@@ -64,9 +64,9 @@ grava apenas novidades e informa quantos itens ja existiam. Depois da confirmaca
 o Android marca o registro como sincronizado. **Enviar agora** serve para antecipar
 uma tentativa, mas nao precisa ser usado no dia a dia.
 
-Quando a confirmacao chegar, o Android habilita **Ocultar** em cada item e
-**Ocultar (N)** no historico. Essas acoes removem somente a copia local; as linhas do
-Google Sheets nao sao apagadas.
+No Android, **Ocultar** cria um filtro local para uma notificacao fixa. **Excluir**
+remove o item local e tenta fecha-lo tambem na barra do sistema. Nenhuma dessas acoes
+apaga linhas que ja estejam no Google Sheets.
 
 ## Funcionamento automatico
 

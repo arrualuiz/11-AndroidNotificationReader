@@ -5,10 +5,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,10 +21,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -31,10 +36,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
@@ -67,6 +76,9 @@ private sealed interface SyncStatus {
 class MainActivity : ComponentActivity() {
     private var notifications by mutableStateOf<List<CapturedNotification>>(emptyList())
     private var ignoredApps by mutableStateOf<List<IgnoredApp>>(emptyList())
+    private var hiddenNotifications by mutableStateOf<List<HiddenNotification>>(emptyList())
+    private var captureHealth by mutableStateOf(CaptureHealth())
+    private var batteryUnrestricted by mutableStateOf(false)
     private var accessGranted by mutableStateOf(false)
     private var syncSettings by mutableStateOf(SheetsSyncSettings())
     private var syncMetadata by mutableStateOf(SheetsSyncMetadata())
@@ -92,18 +104,31 @@ class MainActivity : ComponentActivity() {
                     accessGranted = accessGranted,
                     notifications = notifications,
                     ignoredApps = ignoredApps,
+                    hiddenNotifications = hiddenNotifications,
+                    captureHealth = captureHealth,
+                    batteryUnrestricted = batteryUnrestricted,
                     syncSettings = syncSettings,
                     syncMetadata = syncMetadata,
                     syncStatus = syncStatus,
                     onOpenSettings = ::openNotificationAccessSettings,
                     onOpenBatterySettings = ::openBatterySettings,
-                    onHideSynced = { NotificationStore.clearSynced(this) },
-                    onHideNotification = { id -> NotificationStore.remove(this, id) },
+                    onDismissNotification = { item ->
+                        NotificationCommands.dismiss(this, item)
+                    },
+                    onHideNotification = { item -> NotificationStore.hide(this, item) },
+                    onReconcile = {
+                        NotificationCommands.reconcile(this)
+                        SyncScheduler.scheduleImmediate(this)
+                    },
                     onIgnoreApp = { packageName, appName ->
                         NotificationStore.ignorePackage(this, packageName, appName)
                     },
                     onAllowApp = { packageName ->
                         NotificationStore.allowPackage(this, packageName)
+                    },
+                    onShowNotification = { sourceKey ->
+                        NotificationStore.show(this, sourceKey)
+                        NotificationCommands.reconcile(this)
                     },
                     onSaveSyncSettings = ::saveSyncSettings,
                     onSync = ::syncWithSheets
@@ -121,6 +146,7 @@ class MainActivity : ComponentActivity() {
                 IntentFilter().apply {
                     addAction(NotificationStore.ACTION_CHANGED)
                     addAction(SheetsSyncMetadataStore.ACTION_CHANGED)
+                    addAction(CaptureHealthStore.ACTION_CHANGED)
                 },
                 ContextCompat.RECEIVER_NOT_EXPORTED
             )
@@ -146,6 +172,10 @@ class MainActivity : ComponentActivity() {
             .contains(packageName)
         notifications = NotificationStore.read(this)
         ignoredApps = NotificationStore.ignoredApps(this)
+        hiddenNotifications = NotificationStore.hiddenNotifications(this)
+        captureHealth = CaptureHealthStore.read(this)
+        batteryUnrestricted = getSystemService(PowerManager::class.java)
+            .isIgnoringBatteryOptimizations(packageName)
         syncMetadata = SheetsSyncMetadataStore.read(this)
     }
 
@@ -205,23 +235,39 @@ private fun NotificationArchiveScreen(
     accessGranted: Boolean,
     notifications: List<CapturedNotification>,
     ignoredApps: List<IgnoredApp>,
+    hiddenNotifications: List<HiddenNotification>,
+    captureHealth: CaptureHealth,
+    batteryUnrestricted: Boolean,
     syncSettings: SheetsSyncSettings,
     syncMetadata: SheetsSyncMetadata,
     syncStatus: SyncStatus,
     onOpenSettings: () -> Unit,
     onOpenBatterySettings: () -> Unit,
-    onHideSynced: () -> Unit,
-    onHideNotification: (String) -> Unit,
+    onDismissNotification: (CapturedNotification) -> Unit,
+    onHideNotification: (CapturedNotification) -> Unit,
+    onReconcile: () -> Unit,
     onIgnoreApp: (String, String) -> Unit,
     onAllowApp: (String) -> Unit,
+    onShowNotification: (String) -> Unit,
     onSaveSyncSettings: (SheetsSyncSettings) -> Unit,
     onSync: () -> Unit
 ) {
-    var showHideSyncedDialog by remember { mutableStateOf(false) }
+    var showCaptureSettings by remember { mutableStateOf(false) }
     var showFiltersDialog by remember { mutableStateOf(false) }
     var showSyncDialog by remember { mutableStateOf(false) }
     var pendingIgnore by remember { mutableStateOf<CapturedNotification?>(null) }
-    val syncedCount = notifications.count { it.syncedAt != null }
+
+    if (showCaptureSettings) {
+        CaptureSettingsScreen(
+            accessGranted = accessGranted,
+            captureHealth = captureHealth,
+            batteryUnrestricted = batteryUnrestricted,
+            onBack = { showCaptureSettings = false },
+            onOpenSettings = onOpenSettings,
+            onOpenBatterySettings = onOpenBatterySettings
+        )
+        return
+    }
 
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp)) {
@@ -238,8 +284,8 @@ private fun NotificationArchiveScreen(
             Spacer(modifier = Modifier.height(16.dp))
             AccessPanel(
                 accessGranted = accessGranted,
-                onOpenSettings = onOpenSettings,
-                onOpenBatterySettings = onOpenBatterySettings
+                listenerConnected = captureHealth.listenerConnected,
+                onConfigure = { showCaptureSettings = true }
             )
             Spacer(modifier = Modifier.height(10.dp))
             SheetsPanel(
@@ -269,13 +315,14 @@ private fun NotificationArchiveScreen(
                     )
                 }
                 TextButton(onClick = { showFiltersDialog = true }) {
-                    Text("Filtros (${ignoredApps.size})")
+                    Text("Filtros (${ignoredApps.size + hiddenNotifications.size})")
                 }
+                Spacer(modifier = Modifier.size(6.dp))
                 TextButton(
-                    onClick = { showHideSyncedDialog = true },
-                    enabled = syncedCount > 0
+                    onClick = onReconcile,
+                    enabled = accessGranted && captureHealth.listenerConnected
                 ) {
-                    Text("Ocultar ($syncedCount)")
+                    Text("Sincronizar")
                 }
             }
 
@@ -290,26 +337,14 @@ private fun NotificationArchiveScreen(
                     items(notifications, key = { it.id }) { notification ->
                         NotificationItem(
                             notification = notification,
-                            onHide = { onHideNotification(notification.id) },
+                            onDismiss = { onDismissNotification(notification) },
+                            onHide = { onHideNotification(notification) },
                             onIgnore = { pendingIgnore = notification }
                         )
                     }
                 }
             }
         }
-    }
-
-    if (showHideSyncedDialog) {
-        ConfirmationDialog(
-            title = "Ocultar itens enviados?",
-            message = "$syncedCount registros serao removidos somente deste aparelho. Eles continuam no Google Sheets.",
-            confirmLabel = "Ocultar",
-            onDismiss = { showHideSyncedDialog = false },
-            onConfirm = {
-                showHideSyncedDialog = false
-                onHideSynced()
-            }
-        )
     }
 
     pendingIgnore?.let { notification ->
@@ -328,8 +363,10 @@ private fun NotificationArchiveScreen(
     if (showFiltersDialog) {
         FiltersDialog(
             ignoredApps = ignoredApps,
+            hiddenNotifications = hiddenNotifications,
             onDismiss = { showFiltersDialog = false },
-            onAllow = onAllowApp
+            onAllow = onAllowApp,
+            onShow = onShowNotification
         )
     }
 
@@ -348,47 +385,132 @@ private fun NotificationArchiveScreen(
 @Composable
 private fun AccessPanel(
     accessGranted: Boolean,
-    onOpenSettings: () -> Unit,
-    onOpenBatterySettings: () -> Unit
+    listenerConnected: Boolean,
+    onConfigure: () -> Unit
 ) {
-    val container = if (accessGranted) Color(0xFFDCEFE8) else Color(0xFFFFE8D6)
-    val content = if (accessGranted) Color(0xFF16483E) else Color(0xFF6E3515)
+    val active = accessGranted && listenerConnected
+    val container = if (active) Color(0xFFDCEFE8) else Color(0xFFFFE8D6)
+    val content = if (active) Color(0xFF16483E) else Color(0xFF6E3515)
 
-    Card(
+    Surface(
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = container),
+        color = container,
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .background(content, CircleShape)
+            )
+            Spacer(modifier = Modifier.size(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (accessGranted) "Captura ativada" else "Acesso ainda nao ativado",
+                    text = if (active) "Captura ativa" else "Captura requer atencao",
                     color = content,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = if (accessGranted) {
-                        "Captura em segundo plano e atualizacao ao vivo."
+                    text = if (!accessGranted) {
+                        "Acesso nao concedido"
+                    } else if (!listenerConnected) {
+                        "Servico reconectando"
                     } else {
-                        "Autorize manualmente nas configuracoes."
+                        "Servico conectado"
                     },
                     color = content,
-                    fontSize = 13.sp
+                    fontSize = 12.sp
                 )
             }
-            Column(horizontalAlignment = Alignment.End) {
-                TextButton(onClick = onOpenSettings) {
-                    Text(if (accessGranted) "Revisar" else "Permitir")
-                }
-                if (accessGranted) {
-                    TextButton(onClick = onOpenBatterySettings) {
-                        Text("Bateria")
-                    }
-                }
+            TextButton(onClick = onConfigure) {
+                Text("Configurar")
             }
+        }
+    }
+}
+
+@Composable
+private fun CaptureSettingsScreen(
+    accessGranted: Boolean,
+    captureHealth: CaptureHealth,
+    batteryUnrestricted: Boolean,
+    onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenBatterySettings: () -> Unit
+) {
+    Surface(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp)) {
+            TextButton(onClick = onBack) { Text("Voltar") }
+            Text(
+                text = "Configuracao de captura",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            DiagnosticRow(
+                label = "Acesso a notificacoes",
+                value = if (accessGranted) "Concedido" else "Bloqueado",
+                healthy = accessGranted,
+                action = "Abrir",
+                onAction = onOpenSettings
+            )
+            DiagnosticRow(
+                label = "Servico em segundo plano",
+                value = if (captureHealth.listenerConnected) "Conectado" else "Desconectado",
+                healthy = captureHealth.listenerConnected
+            )
+            DiagnosticRow(
+                label = "Ultima captura",
+                value = if (captureHealth.lastNotificationAt > 0) {
+                    formatTimestamp(captureHealth.lastNotificationAt)
+                } else {
+                    "Nenhuma"
+                },
+                healthy = captureHealth.lastNotificationAt > 0
+            )
+            DiagnosticRow(
+                label = "Otimizacao de bateria",
+                value = if (batteryUnrestricted) "Sem restricao" else "Ativa",
+                healthy = batteryUnrestricted,
+                action = "Abrir",
+                onAction = onOpenBatterySettings
+            )
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticRow(
+    label: String,
+    value: String,
+    healthy: Boolean,
+    action: String? = null,
+    onAction: (() -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(9.dp)
+                .background(
+                    if (healthy) Color(0xFF146C60) else Color(0xFFB45A24),
+                    CircleShape
+                )
+        )
+        Spacer(modifier = Modifier.size(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, fontWeight = FontWeight.SemiBold)
+            Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        }
+        if (action != null && onAction != null) {
+            TextButton(onClick = onAction) { Text(action) }
         }
     }
 }
@@ -480,56 +602,116 @@ private fun EmptyState(modifier: Modifier = Modifier) {
 @Composable
 private fun NotificationItem(
     notification: CapturedNotification,
+    onDismiss: () -> Unit,
     onHide: () -> Unit,
     onIgnore: () -> Unit
 ) {
-    Card(
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = notification.appName,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = formatTimestamp(notification.postedAt),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 12.sp
-                )
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    onDismiss()
+                    true
+                }
+                SwipeToDismissBoxValue.EndToStart -> {
+                    onIgnore()
+                    false
+                }
+                SwipeToDismissBoxValue.Settled -> false
             }
-            if (notification.title.isNotBlank()) {
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(notification.title, fontWeight = FontWeight.SemiBold)
-            }
-            if (notification.text.isNotBlank()) {
-                Text(notification.text, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+        },
+        positionalThreshold = { distance -> distance * 0.35f }
+    )
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            val deleting = dismissState.dismissDirection == SwipeToDismissBoxValue.StartToEnd
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        if (deleting) Color(0xFF9F3F37) else Color(0xFF6A4F7D),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .padding(horizontal = 20.dp),
+                contentAlignment = if (deleting) Alignment.CenterStart else Alignment.CenterEnd
             ) {
                 Text(
-                    text = notification.category,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
+                    text = if (deleting) "Excluir" else "Ignorar app",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
                 )
-                if (notification.syncedAt != null) {
-                    TextButton(onClick = onHide) {
-                        Text("Ocultar")
+            }
+        },
+        content = {
+            Card(
+                shape = RoundedCornerShape(8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = notification.appName,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = notification.category,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                        Text(
+                            text = formatTimestamp(notification.postedAt),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
                     }
-                }
-                TextButton(onClick = onIgnore) {
-                    Text("Ignorar app")
+                    if (notification.title.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(notification.title, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (notification.text.isNotBlank()) {
+                        Text(
+                            notification.text,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (notification.syncedAt == null) "Pendente" else "No Sheets",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = onHide) {
+                            Text("Ocultar")
+                        }
+                    }
                 }
             }
         }
-    }
+    )
 }
 
 @Composable
@@ -552,21 +734,26 @@ private fun ConfirmationDialog(
 @Composable
 private fun FiltersDialog(
     ignoredApps: List<IgnoredApp>,
+    hiddenNotifications: List<HiddenNotification>,
     onDismiss: () -> Unit,
-    onAllow: (String) -> Unit
+    onAllow: (String) -> Unit,
+    onShow: (String) -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Apps ignorados") },
+        title = { Text("Filtros locais") },
         text = {
-            if (ignoredApps.isEmpty()) {
-                Text("Nenhum aplicativo esta sendo ignorado.")
+            if (ignoredApps.isEmpty() && hiddenNotifications.isEmpty()) {
+                Text("Nenhum filtro local ativo.")
             } else {
                 Column(
                     modifier = Modifier
                         .heightIn(max = 320.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
+                    if (ignoredApps.isNotEmpty()) {
+                        Text("Apps ignorados", fontWeight = FontWeight.Bold)
+                    }
                     ignoredApps.forEach { app ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -578,6 +765,24 @@ private fun FiltersDialog(
                             }
                             TextButton(onClick = { onAllow(app.packageName) }) {
                                 Text("Reativar")
+                            }
+                        }
+                    }
+                    if (hiddenNotifications.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Notificacoes ocultas", fontWeight = FontWeight.Bold)
+                    }
+                    hiddenNotifications.forEach { item ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(item.appName, fontWeight = FontWeight.SemiBold)
+                                Text(item.title.ifBlank { "Notificacao sem titulo" }, fontSize = 11.sp)
+                            }
+                            TextButton(onClick = { onShow(item.sourceKey) }) {
+                                Text("Mostrar")
                             }
                         }
                     }

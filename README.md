@@ -8,7 +8,7 @@ Projeto inicial Android em Kotlin e Jetpack Compose. Esta primeira versao:
 - Guarda ate 2.000 itens localmente no aparelho.
 - Mostra o historico quando o aplicativo e reaberto.
 
-A versao 0.4.0 tambem consolida notificacoes identicas, atualiza a tela ao vivo,
+A versao 0.5.0 tambem consolida notificacoes identicas, atualiza a tela ao vivo,
 permite ocultar itens enviados, ignorar aplicativos repetitivos e sincroniza os registros
 automaticamente com um Google Sheets por meio de um endpoint do Apps Script.
 
@@ -17,9 +17,14 @@ tenta enviar cerca de 15 segundos depois de uma notificacao e mantem uma verific
 periodica, com internet, a cada 15 minutos. O botao **Enviar agora** continua como
 alternativa manual.
 
-Depois que o Sheets confirma um registro, o botao **Ocultar** pode remove-lo apenas
-da tela do Android. **Ocultar (N)** remove em lote todos os registros confirmados.
-Os dados permanecem na planilha. Itens pendentes nao podem ser ocultados por engano.
+Na lista, arrastar para a direita executa **Excluir** e tenta fechar tambem a
+notificacao do sistema. Arrastar para a esquerda abre **Ignorar app**. O botao
+**Ocultar** cria uma regra local persistente para aquela notificacao, util para avisos
+fixos. Os dados que ja chegaram ao Sheets permanecem na planilha.
+
+O botao **Sincronizar** do historico reconcilia a lista com as notificacoes ativas do
+Redmi: inclui as que estiverem no sistema e remove localmente as que ja sairam. Itens
+ainda pendentes no Sheets sao preservados ate receberem confirmacao.
 
 Ela ainda nao possui banco Room, login ou edicao de categorias dentro do Android.
 

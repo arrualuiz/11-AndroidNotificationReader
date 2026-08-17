@@ -12,12 +12,14 @@ object NotificationStore {
     private const val PREFERENCES_NAME = "notification_archive"
     private const val NOTIFICATIONS_KEY = "notifications"
     private const val IGNORED_APPS_KEY = "ignored_apps"
+    private const val HIDDEN_NOTIFICATIONS_KEY = "hidden_notifications"
     private const val MAX_ITEMS = 2_000
     private const val DUPLICATE_WINDOW_MS = 10 * 60 * 1_000L
 
     @Synchronized
     fun add(context: Context, notification: CapturedNotification): Boolean {
         if (isPackageIgnored(context, notification.packageName)) return false
+        if (isNotificationHidden(context, notification.sourceKey)) return false
 
         val current = readInternal(context)
         val duplicate = current.firstOrNull {
@@ -30,7 +32,15 @@ object NotificationStore {
         val item = if (duplicate == null) {
             notification
         } else {
-            notification.copy(id = duplicate.id, category = duplicate.category)
+            notification.copy(
+                id = duplicate.id,
+                category = duplicate.category,
+                syncedAt = if (notification.postedAt == duplicate.postedAt) {
+                    duplicate.syncedAt
+                } else {
+                    null
+                }
+            )
         }
 
         val updated = buildList {
@@ -94,12 +104,58 @@ object NotificationStore {
     }
 
     @Synchronized
+    fun hide(context: Context, notification: CapturedNotification) {
+        val hidden = hiddenNotifications(context)
+            .filterNot { it.sourceKey == notification.sourceKey }
+            .plus(
+                HiddenNotification(
+                    sourceKey = notification.sourceKey,
+                    packageName = notification.packageName,
+                    appName = notification.appName,
+                    title = notification.title.ifBlank { notification.text.take(120) }
+                )
+            )
+        writeHiddenNotifications(context, hidden)
+        writeNotifications(
+            context,
+            readInternal(context).filterNot { it.sourceKey == notification.sourceKey }
+        )
+        notifyChanged(context)
+    }
+
+    @Synchronized
+    fun show(context: Context, sourceKey: String) {
+        writeHiddenNotifications(
+            context,
+            hiddenNotifications(context).filterNot { it.sourceKey == sourceKey }
+        )
+        notifyChanged(context)
+    }
+
+    @Synchronized
+    fun removeSyncedNotActive(context: Context, activeSourceKeys: Set<String>): Int {
+        val current = readInternal(context)
+        val updated = current.filter { item ->
+            item.syncedAt == null || item.sourceKey in activeSourceKeys
+        }
+        if (updated == current) return 0
+
+        writeNotifications(context, updated)
+        notifyChanged(context)
+        return current.size - updated.size
+    }
+
+    @Synchronized
     fun ignorePackage(context: Context, packageName: String, appName: String) {
         val apps = ignoredApps(context)
             .filterNot { it.packageName == packageName }
             .plus(IgnoredApp(packageName, appName))
             .sortedBy { it.appName.lowercase() }
         writeIgnoredApps(context, apps)
+        writeHiddenNotifications(
+            context,
+            hiddenNotifications(context).filterNot { it.packageName == packageName }
+        )
         writeNotifications(context, readInternal(context).filterNot { it.packageName == packageName })
         notifyChanged(context)
     }
@@ -113,6 +169,9 @@ object NotificationStore {
     fun isPackageIgnored(context: Context, packageName: String): Boolean =
         ignoredApps(context).any { it.packageName == packageName }
 
+    fun isNotificationHidden(context: Context, sourceKey: String): Boolean =
+        hiddenNotifications(context).any { it.sourceKey == sourceKey }
+
     fun ignoredApps(context: Context): List<IgnoredApp> {
         val raw = preferences(context).getString(IGNORED_APPS_KEY, null) ?: return emptyList()
         return runCatching {
@@ -120,6 +179,24 @@ object NotificationStore {
             List(json.length()) { index ->
                 json.getJSONObject(index).let {
                     IgnoredApp(it.getString("packageName"), it.getString("appName"))
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun hiddenNotifications(context: Context): List<HiddenNotification> {
+        val raw = preferences(context).getString(HIDDEN_NOTIFICATIONS_KEY, null)
+            ?: return emptyList()
+        return runCatching {
+            val json = JSONArray(raw)
+            List(json.length()) { index ->
+                json.getJSONObject(index).let {
+                    HiddenNotification(
+                        sourceKey = it.getString("sourceKey"),
+                        packageName = it.getString("packageName"),
+                        appName = it.getString("appName"),
+                        title = it.optString("title")
+                    )
                 }
             }
         }.getOrDefault(emptyList())
@@ -171,6 +248,21 @@ object NotificationStore {
             })
         }
         preferences(context).edit().putString(IGNORED_APPS_KEY, json.toString()).commit()
+    }
+
+    private fun writeHiddenNotifications(context: Context, items: List<HiddenNotification>) {
+        val json = JSONArray()
+        items.forEach { item ->
+            json.put(JSONObject().apply {
+                put("sourceKey", item.sourceKey)
+                put("packageName", item.packageName)
+                put("appName", item.appName)
+                put("title", item.title)
+            })
+        }
+        preferences(context).edit()
+            .putString(HIDDEN_NOTIFICATIONS_KEY, json.toString())
+            .commit()
     }
 
     private fun preferences(context: Context) =

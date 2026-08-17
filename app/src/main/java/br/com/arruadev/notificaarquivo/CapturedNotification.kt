@@ -16,3 +16,10 @@ data class IgnoredApp(
     val packageName: String,
     val appName: String
 )
+
+data class HiddenNotification(
+    val sourceKey: String,
+    val packageName: String,
+    val appName: String,
+    val title: String
+)
