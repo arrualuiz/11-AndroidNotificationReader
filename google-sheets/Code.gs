@@ -1,32 +1,46 @@
-const SPREADSHEET_URL =
-  'https://docs.google.com/spreadsheets/d/1Q-Ccl5UngOts5X0yCPJ04USDVjk6rCciCyynOlPrVN0/edit';
-const DEBUG_ROOT_FOLDER = 'NotificaArquivo-Debug';
-const DEBUG_TIME_ZONE = 'America/Sao_Paulo';
+const PROPERTY_KEYS = Object.freeze({
+  token: 'SYNC_TOKEN',
+  spreadsheetId: 'SPREADSHEET_ID',
+  debugParentFolderId: 'DEBUG_PARENT_FOLDER_ID',
+  debugFolderName: 'DEBUG_FOLDER_NAME',
+  debugTimeZone: 'DEBUG_TIME_ZONE',
+  notificationsSheet: 'SHEET_NOTIFICATIONS',
+  categoriesSheet: 'SHEET_CATEGORIES',
+  applicationsSheet: 'SHEET_APPLICATIONS',
+  financialSheet: 'SHEET_FINANCIAL',
+  dashboardSheet: 'SHEET_DASHBOARD',
+  helpSheet: 'SHEET_HELP',
+});
 
-const SHEETS = {
-  notifications: 'Notificacoes',
-  categories: 'Categorias',
-  applications: 'Aplicativos',
-  financial: 'Financeiro',
-  dashboard: 'Dashboard',
-  help: 'Ajuda',
-};
-
-const API_VERSION = '0.5.5';
+const API_VERSION = '0.6.0';
 
 const NOTIFICATION_HEADERS = [
-  'ID',
-  'Device ID',
-  'Chave fonte',
-  'Pacote',
+  'Recebido em',
   'Aplicativo',
   'Titulo',
   'Texto',
-  'Data notificacao',
   'Categoria',
+  'ID',
   'Sensivel?',
-  'Recebido em',
+  'Data notificacao',
+  'Pacote',
+  'Chave fonte',
+  'Device ID',
 ];
+
+const NOTIFICATION_COLUMNS = Object.freeze({
+  receivedAt: 0,
+  appName: 1,
+  title: 2,
+  text: 3,
+  category: 4,
+  id: 5,
+  sensitive: 6,
+  postedAt: 7,
+  packageName: 8,
+  sourceKey: 9,
+  deviceId: 10,
+});
 
 const CATEGORY_HEADERS = ['Pacote', 'Aplicativo', 'Categoria', 'Incluir?', 'Sensivel?'];
 const FINANCIAL_HEADERS = NOTIFICATION_HEADERS;
@@ -41,29 +55,22 @@ const APPLICATION_HEADERS = [
 ];
 
 /**
- * Edite o token abaixo e execute esta funcao uma vez pelo editor do Apps Script.
- */
-function configurarToken() {
-  const token = 'TROQUE-POR-UM-TOKEN-GRANDE-E-ALEATORIO';
-  PropertiesService.getScriptProperties().setProperty('SYNC_TOKEN', token);
-}
-
-/**
  * Execute uma vez depois de importar a planilha-modelo.
  */
 function prepararPlanilha() {
-  const spreadsheet = runWithDebug_('prepararPlanilha/abrir-planilha', () => configuredSpreadsheet_());
+  const config = configuredProperties_();
+  const spreadsheet = runWithDebug_('prepararPlanilha/abrir-planilha', () => configuredSpreadsheet_(config));
   runStepsWithDebug_('prepararPlanilha', [
-    ['preparar-Notificacoes', () => ensureSheet_(spreadsheet, SHEETS.notifications, NOTIFICATION_HEADERS)],
-    ['preparar-Categorias', () => ensureSheet_(spreadsheet, SHEETS.categories, CATEGORY_HEADERS)],
-    ['preparar-Aplicativos', () => ensureSheet_(spreadsheet, SHEETS.applications, APPLICATION_HEADERS)],
-    ['preparar-Financeiro', () => ensureSheet_(spreadsheet, SHEETS.financial, FINANCIAL_HEADERS)],
-    ['preparar-Dashboard', () => ensurePlainSheet_(spreadsheet, SHEETS.dashboard)],
-    ['preparar-Ajuda', () => ensurePlainSheet_(spreadsheet, SHEETS.help)],
-    ['catalogar-categorias', () => syncCategoryCatalog_(spreadsheet)],
-    ['categorizar-historico', () => updateNotificationCategories_(spreadsheet)],
-    ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet)],
-    ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet)],
+    ['preparar-Notificacoes', () => ensureNotificationSheet_(spreadsheet, config.sheets.notifications)],
+    ['preparar-Categorias', () => ensureSheet_(spreadsheet, config.sheets.categories, CATEGORY_HEADERS)],
+    ['preparar-Aplicativos', () => ensureSheet_(spreadsheet, config.sheets.applications, APPLICATION_HEADERS)],
+    ['preparar-Financeiro', () => ensureNotificationSheet_(spreadsheet, config.sheets.financial)],
+    ['preparar-Dashboard', () => ensurePlainSheet_(spreadsheet, config.sheets.dashboard)],
+    ['preparar-Ajuda', () => ensurePlainSheet_(spreadsheet, config.sheets.help)],
+    ['catalogar-categorias', () => syncCategoryCatalog_(spreadsheet, config)],
+    ['categorizar-historico', () => updateNotificationCategories_(spreadsheet, config)],
+    ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet, config)],
+    ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet, config)],
   ]);
   return `Planilha preparada: ${spreadsheet.getName()} (${spreadsheet.getId()})`;
 }
@@ -85,24 +92,26 @@ function configurarAtualizacaoAutomatica() {
 }
 
 function atualizarResumos() {
-  const spreadsheet = runWithDebug_('atualizarResumos/abrir-planilha', () => configuredSpreadsheet_());
+  const config = configuredProperties_();
+  const spreadsheet = runWithDebug_('atualizarResumos/abrir-planilha', () => configuredSpreadsheet_(config));
   runStepsWithDebug_('atualizarResumos', [
-    ['catalogar-categorias', () => syncCategoryCatalog_(spreadsheet)],
-    ['categorizar-historico', () => updateNotificationCategories_(spreadsheet)],
-    ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet)],
-    ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet)],
+    ['catalogar-categorias', () => syncCategoryCatalog_(spreadsheet, config)],
+    ['categorizar-historico', () => updateNotificationCategories_(spreadsheet, config)],
+    ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet, config)],
+    ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet, config)],
   ]);
 }
 
 function diagnosticarConfiguracao() {
   return runWithDebug_('diagnosticarConfiguracao', () => {
-    const spreadsheet = configuredSpreadsheet_();
+    const config = configuredProperties_();
+    const spreadsheet = configuredSpreadsheet_(config);
     const result = {
       ok: true,
       apiVersion: API_VERSION,
       spreadsheetId: spreadsheet.getId(),
       spreadsheetName: spreadsheet.getName(),
-      tabs: Object.values(SHEETS).map((name) => ({
+      tabs: Object.values(config.sheets).map((name) => ({
         name,
         exists: Boolean(spreadsheet.getSheetByName(name)),
       })),
@@ -126,24 +135,24 @@ function doPost(event) {
   let payload = {};
 
   try {
+    const config = configuredProperties_();
     payload = JSON.parse(event.postData.contents || '{}');
-    const expectedToken = PropertiesService.getScriptProperties().getProperty('SYNC_TOKEN');
-    if (!expectedToken || payload.token !== expectedToken) {
+    if (payload.token !== config.token) {
       return json_({ ok: false, error: 'Token invalido.' });
     }
 
-    const spreadsheet = configuredSpreadsheet_();
-    const sheet = spreadsheet.getSheetByName(SHEETS.notifications);
+    const spreadsheet = configuredSpreadsheet_(config);
+    const sheet = spreadsheet.getSheetByName(config.sheets.notifications);
     if (!sheet) {
       return json_({
         ok: false,
         apiVersion: API_VERSION,
-        error: 'Aba Notificacoes nao encontrada. Execute prepararPlanilha uma vez.',
+        error: `Aba ${config.sheets.notifications} nao encontrada. Execute prepararPlanilha uma vez.`,
       });
     }
-    const rules = readCategoryRules_(spreadsheet);
+    const rules = readCategoryRules_(spreadsheet, config);
     const existingIds = readExistingIds_(sheet);
-    const financialSheet = ensureSheet_(spreadsheet, SHEETS.financial, FINANCIAL_HEADERS);
+    const financialSheet = ensureNotificationSheet_(spreadsheet, config.sheets.financial);
     const notifications = Array.isArray(payload.notifications) ? payload.notifications : [];
     const rows = [];
     let duplicates = 0;
@@ -172,17 +181,17 @@ function doPost(event) {
         ? automaticCategory
         : category;
       rows.push([
-        id,
-        clean_(payload.deviceId, 300),
-        clean_(item.sourceKey, 500),
-        packageName,
+        new Date(),
         appName,
         title,
         text,
-        safeDate_(item.postedAt),
         resolvedCategory,
+        id,
         rule ? rule.sensitive : resolvedCategory === 'Financeiro',
-        new Date(),
+        safeDate_(item.postedAt),
+        packageName,
+        clean_(item.sourceKey, 500),
+        clean_(payload.deviceId, 300),
       ]);
       existingIds.add(id);
     });
@@ -204,7 +213,7 @@ function doPost(event) {
       }
 
       try {
-        syncCategoryCatalog_(spreadsheet);
+        syncCategoryCatalog_(spreadsheet, config);
       } catch (catalogError) {
         writeErrorReport_('doPost/catalogar-categorias', catalogError, {
           deviceId: clean_(payload.deviceId, 300),
@@ -240,17 +249,18 @@ function doPost(event) {
 /** Remove somente as linhas de demonstracao que comecam com EXEMPLO-. */
 function limparExemplos() {
   return runWithDebug_('limparExemplos', () => {
-    const sheet = configuredSpreadsheet_().getSheetByName(SHEETS.notifications);
+    const config = configuredProperties_();
+    const sheet = configuredSpreadsheet_(config).getSheetByName(config.sheets.notifications);
     if (!sheet || sheet.getLastRow() < 2) return;
     const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
-    const kept = values.filter((row) => !String(row[0]).startsWith('EXEMPLO-'));
+    const kept = values.filter((row) => !String(row[NOTIFICATION_COLUMNS.id]).startsWith('EXEMPLO-'));
     replaceDataRows_(sheet, sheet.getLastColumn(), kept);
     atualizarResumos();
   });
 }
 
-function readCategoryRules_(spreadsheet) {
-  const sheet = spreadsheet.getSheetByName(SHEETS.categories);
+function readCategoryRules_(spreadsheet, config) {
+  const sheet = spreadsheet.getSheetByName(config.sheets.categories);
   const rules = new Map();
   if (!sheet || sheet.getLastRow() < 2) return rules;
 
@@ -266,9 +276,9 @@ function readCategoryRules_(spreadsheet) {
   return rules;
 }
 
-function syncCategoryCatalog_(spreadsheet) {
-  const source = spreadsheet.getSheetByName(SHEETS.notifications);
-  const target = ensureSheet_(spreadsheet, SHEETS.categories, CATEGORY_HEADERS);
+function syncCategoryCatalog_(spreadsheet, config) {
+  const source = spreadsheet.getSheetByName(config.sheets.notifications);
+  const target = ensureSheet_(spreadsheet, config.sheets.categories, CATEGORY_HEADERS);
   if (!source || source.getLastRow() < 2) return;
 
   const existingPackages = target.getLastRow() < 2
@@ -287,10 +297,15 @@ function syncCategoryCatalog_(spreadsheet) {
     .getRange(2, 1, source.getLastRow() - 1, NOTIFICATION_HEADERS.length)
     .getValues()
     .forEach((row) => {
-      const packageName = String(row[3] || '').trim();
+      const packageName = String(row[NOTIFICATION_COLUMNS.packageName] || '').trim();
       if (!packageName || existingPackages.has(packageName) || newApps.has(packageName)) return;
-      const appName = String(row[4] || packageName).trim();
-      const category = automaticCategory_(packageName, appName, row[5], row[6]);
+      const appName = String(row[NOTIFICATION_COLUMNS.appName] || packageName).trim();
+      const category = automaticCategory_(
+        packageName,
+        appName,
+        row[NOTIFICATION_COLUMNS.title],
+        row[NOTIFICATION_COLUMNS.text]
+      );
       newApps.set(packageName, [
         packageName,
         appName,
@@ -306,38 +321,45 @@ function syncCategoryCatalog_(spreadsheet) {
   }
 }
 
-function updateNotificationCategories_(spreadsheet) {
-  const sheet = spreadsheet.getSheetByName(SHEETS.notifications);
+function updateNotificationCategories_(spreadsheet, config) {
+  const sheet = spreadsheet.getSheetByName(config.sheets.notifications);
   if (!sheet || sheet.getLastRow() < 2) return;
 
-  const rules = readCategoryRules_(spreadsheet);
+  const rules = readCategoryRules_(spreadsheet, config);
   const rowCount = sheet.getLastRow() - 1;
   const rows = sheet.getRange(2, 1, rowCount, NOTIFICATION_HEADERS.length).getValues();
   const categories = [];
   const sensitiveValues = [];
 
   rows.forEach((row) => {
-    const packageName = String(row[3] || '').trim();
-    const appName = String(row[4] || packageName).trim();
+    const packageName = String(row[NOTIFICATION_COLUMNS.packageName] || '').trim();
+    const appName = String(row[NOTIFICATION_COLUMNS.appName] || packageName).trim();
     const rule = rules.get(packageName);
-    const automatic = automaticCategory_(packageName, appName, row[5], row[6]);
-    const current = String(row[8] || '').trim();
+    const automatic = automaticCategory_(
+      packageName,
+      appName,
+      row[NOTIFICATION_COLUMNS.title],
+      row[NOTIFICATION_COLUMNS.text]
+    );
+    const current = String(row[NOTIFICATION_COLUMNS.category] || '').trim();
     const category = rule?.category && rule.category !== 'Sem categoria'
       ? rule.category
       : current && current !== 'Sem categoria'
         ? current
         : automatic;
     categories.push([category]);
-    sensitiveValues.push([rule ? rule.sensitive : row[9] === true || category === 'Financeiro']);
+    sensitiveValues.push([
+      rule ? rule.sensitive : row[NOTIFICATION_COLUMNS.sensitive] === true || category === 'Financeiro',
+    ]);
   });
 
-  sheet.getRange(2, 9, rowCount, 1).setValues(categories);
-  sheet.getRange(2, 10, rowCount, 1).setValues(sensitiveValues);
+  sheet.getRange(2, NOTIFICATION_COLUMNS.category + 1, rowCount, 1).setValues(categories);
+  sheet.getRange(2, NOTIFICATION_COLUMNS.sensitive + 1, rowCount, 1).setValues(sensitiveValues);
 }
 
-function rebuildFinancial_(spreadsheet) {
-  const source = spreadsheet.getSheetByName(SHEETS.notifications);
-  const target = ensureSheet_(spreadsheet, SHEETS.financial, FINANCIAL_HEADERS);
+function rebuildFinancial_(spreadsheet, config) {
+  const source = spreadsheet.getSheetByName(config.sheets.notifications);
+  const target = ensureNotificationSheet_(spreadsheet, config.sheets.financial);
   const rows = source && source.getLastRow() >= 2
     ? source
         .getRange(2, 1, source.getLastRow() - 1, NOTIFICATION_HEADERS.length)
@@ -349,8 +371,13 @@ function rebuildFinancial_(spreadsheet) {
 }
 
 function isFinancialRow_(row) {
-  return String(row[8] || '') === 'Financeiro' ||
-    automaticCategory_(row[3], row[4], row[5], row[6]) === 'Financeiro';
+  return String(row[NOTIFICATION_COLUMNS.category] || '') === 'Financeiro' ||
+    automaticCategory_(
+      row[NOTIFICATION_COLUMNS.packageName],
+      row[NOTIFICATION_COLUMNS.appName],
+      row[NOTIFICATION_COLUMNS.title],
+      row[NOTIFICATION_COLUMNS.text]
+    ) === 'Financeiro';
 }
 
 function automaticCategory_(packageName, appName, title, text) {
@@ -404,34 +431,41 @@ function containsAny_(source, values) {
 function readExistingIds_(sheet) {
   if (sheet.getLastRow() < 2) return new Set();
   return new Set(
-    sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getDisplayValues().flat().filter(Boolean)
+    sheet
+      .getRange(2, NOTIFICATION_COLUMNS.id + 1, sheet.getLastRow() - 1, 1)
+      .getDisplayValues()
+      .flat()
+      .filter(Boolean)
   );
 }
 
-function rebuildApplications_(spreadsheet = configuredSpreadsheet_()) {
-  const source = spreadsheet.getSheetByName(SHEETS.notifications);
-  const target = ensureSheet_(spreadsheet, SHEETS.applications, APPLICATION_HEADERS);
+function rebuildApplications_(spreadsheet, config) {
+  const resolvedConfig = config || configuredProperties_();
+  const resolvedSpreadsheet = spreadsheet || configuredSpreadsheet_(resolvedConfig);
+  const source = resolvedSpreadsheet.getSheetByName(resolvedConfig.sheets.notifications);
+  const target = ensureSheet_(resolvedSpreadsheet, resolvedConfig.sheets.applications, APPLICATION_HEADERS);
   const groups = new Map();
 
   if (source && source.getLastRow() >= 2) {
     source.getRange(2, 1, source.getLastRow() - 1, NOTIFICATION_HEADERS.length).getValues().forEach((row) => {
-      const packageName = String(row[3] || '').trim();
+      const packageName = String(row[NOTIFICATION_COLUMNS.packageName] || '').trim();
       if (!packageName) return;
-      const date = row[7] instanceof Date ? row[7] : new Date(row[7]);
+      const postedAt = row[NOTIFICATION_COLUMNS.postedAt];
+      const date = postedAt instanceof Date ? postedAt : new Date(postedAt);
       const current = groups.get(packageName) || {
         packageName,
-        appName: String(row[4] || packageName),
-        category: String(row[8] || 'Sem categoria'),
+        appName: String(row[NOTIFICATION_COLUMNS.appName] || packageName),
+        category: String(row[NOTIFICATION_COLUMNS.category] || 'Sem categoria'),
         count: 0,
         first: date,
         last: date,
-        sensitive: row[9] === true,
+        sensitive: row[NOTIFICATION_COLUMNS.sensitive] === true,
       };
       current.count += 1;
       if (date < current.first) current.first = date;
       if (date > current.last) current.last = date;
-      current.category = String(row[8] || current.category);
-      current.sensitive = current.sensitive || row[9] === true;
+      current.category = String(row[NOTIFICATION_COLUMNS.category] || current.category);
+      current.sensitive = current.sensitive || row[NOTIFICATION_COLUMNS.sensitive] === true;
       groups.set(packageName, current);
     });
   }
@@ -458,6 +492,55 @@ function ensureSheet_(spreadsheet, name, headers) {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   }
   return sheet;
+}
+
+function ensureNotificationSheet_(spreadsheet, name) {
+  const sheet = spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name);
+  const currentColumnCount = Math.max(sheet.getLastColumn(), NOTIFICATION_HEADERS.length);
+  const currentHeaders = sheet
+    .getRange(1, 1, 1, currentColumnCount)
+    .getDisplayValues()[0]
+    .map((value) => String(value || '').trim());
+  const relevantHeaders = currentHeaders.slice(0, Math.max(
+    NOTIFICATION_HEADERS.length,
+    currentHeaders.reduce((last, value, index) => value ? index + 1 : last, 0)
+  ));
+
+  if (relevantHeaders.slice(0, NOTIFICATION_HEADERS.length).join('|') === NOTIFICATION_HEADERS.join('|')) {
+    return sheet;
+  }
+
+  const rowCount = Math.max(0, sheet.getLastRow() - 1);
+  if (rowCount === 0) {
+    sheet.getRange(1, 1, 1, NOTIFICATION_HEADERS.length).setValues([NOTIFICATION_HEADERS]);
+    return sheet;
+  }
+
+  const indexByHeader = new Map(
+    relevantHeaders.map((header, index) => [headerKey_(header), index])
+  );
+  const missing = NOTIFICATION_HEADERS.filter((header) => !indexByHeader.has(headerKey_(header)));
+  if (missing.length > 0) {
+    throw new Error(
+      `A aba ${name} possui dados, mas faltam cabecalhos para migracao: ${missing.join(', ')}`
+    );
+  }
+
+  const existingRows = sheet
+    .getRange(2, 1, rowCount, relevantHeaders.length)
+    .getValues();
+  const reorderedRows = existingRows.map((row) =>
+    NOTIFICATION_HEADERS.map((header) => row[indexByHeader.get(headerKey_(header))])
+  );
+
+  sheet
+    .getRange(1, 1, reorderedRows.length + 1, NOTIFICATION_HEADERS.length)
+    .setValues([NOTIFICATION_HEADERS, ...reorderedRows]);
+  return sheet;
+}
+
+function headerKey_(value) {
+  return normalize_(value).replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
 function ensurePlainSheet_(spreadsheet, name) {
@@ -496,22 +579,23 @@ function runStepsWithDebug_(operation, steps) {
 
 function writeErrorReport_(operation, error, context = {}) {
   try {
+    const config = configuredProperties_();
     const now = new Date();
-    const day = Utilities.formatDate(now, DEBUG_TIME_ZONE, 'yyyy-MM-dd');
-    const time = Utilities.formatDate(now, DEBUG_TIME_ZONE, 'HH-mm-ss');
-    const root = getOrCreateFolder_(DriveApp.getRootFolder(), DEBUG_ROOT_FOLDER);
+    const day = Utilities.formatDate(now, config.debugTimeZone, 'yyyy-MM-dd');
+    const time = Utilities.formatDate(now, config.debugTimeZone, 'HH-mm-ss');
+    const debugParent = DriveApp.getFolderById(config.debugParentFolderId);
+    const root = getOrCreateFolder_(debugParent, config.debugFolderName);
     const daily = getOrCreateFolder_(root, day);
     const safeOperation = String(operation || 'erro').replace(/[^a-zA-Z0-9_-]+/g, '-');
     const suffix = Utilities.getUuid().slice(0, 8);
     const fileName = `${time}-${safeOperation}-${suffix}.json`;
     const report = {
-      timestamp: Utilities.formatDate(now, DEBUG_TIME_ZONE, "yyyy-MM-dd'T'HH:mm:ssXXX"),
+      timestamp: Utilities.formatDate(now, config.debugTimeZone, "yyyy-MM-dd'T'HH:mm:ssXXX"),
       apiVersion: API_VERSION,
       operation,
       spreadsheet: {
-        id: safeSpreadsheetId_(),
-        url: SPREADSHEET_URL,
-        tabs: SHEETS,
+        id: config.spreadsheetId,
+        tabs: config.sheets,
       },
       error: {
         name: String(error?.name || 'Error'),
@@ -522,7 +606,7 @@ function writeErrorReport_(operation, error, context = {}) {
     };
     const file = daily.createFile(fileName, JSON.stringify(report, null, 2), MimeType.PLAIN_TEXT);
     return {
-      path: `${DEBUG_ROOT_FOLDER}/${day}/${fileName}`,
+      path: `${config.debugFolderName}/${day}/${fileName}`,
       url: file.getUrl(),
     };
   } catch (debugError) {
@@ -539,22 +623,52 @@ function getOrCreateFolder_(parent, name) {
   return matches.hasNext() ? matches.next() : parent.createFolder(name);
 }
 
-function safeSpreadsheetId_() {
-  try {
-    return spreadsheetIdFromUrl_();
-  } catch (error) {
-    return '';
+function configuredSpreadsheet_(config = configuredProperties_()) {
+  return SpreadsheetApp.openById(config.spreadsheetId);
+}
+
+function configuredProperties_() {
+  const values = PropertiesService.getScriptProperties().getProperties();
+  const missing = Object.values(PROPERTY_KEYS).filter((key) => !String(values[key] || '').trim());
+  if (missing.length > 0) {
+    throw new Error(`Configure as Script Properties ausentes: ${missing.join(', ')}`);
   }
+
+  return {
+    token: String(values[PROPERTY_KEYS.token]).trim(),
+    spreadsheetId: spreadsheetIdFromValue_(values[PROPERTY_KEYS.spreadsheetId]),
+    debugParentFolderId: folderIdFromValue_(values[PROPERTY_KEYS.debugParentFolderId]),
+    debugFolderName: String(values[PROPERTY_KEYS.debugFolderName]).trim(),
+    debugTimeZone: String(values[PROPERTY_KEYS.debugTimeZone]).trim(),
+    sheets: {
+      notifications: String(values[PROPERTY_KEYS.notificationsSheet]).trim(),
+      categories: String(values[PROPERTY_KEYS.categoriesSheet]).trim(),
+      applications: String(values[PROPERTY_KEYS.applicationsSheet]).trim(),
+      financial: String(values[PROPERTY_KEYS.financialSheet]).trim(),
+      dashboard: String(values[PROPERTY_KEYS.dashboardSheet]).trim(),
+      help: String(values[PROPERTY_KEYS.helpSheet]).trim(),
+    },
+  };
 }
 
-function configuredSpreadsheet_() {
-  return SpreadsheetApp.openById(spreadsheetIdFromUrl_());
+function spreadsheetIdFromValue_(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  const id = match ? match[1] : text;
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    throw new Error(`Script Property ${PROPERTY_KEYS.spreadsheetId} invalida.`);
+  }
+  return id;
 }
 
-function spreadsheetIdFromUrl_() {
-  const match = SPREADSHEET_URL.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-  if (!match) throw new Error('Configure SPREADSHEET_URL com o link completo da planilha.');
-  return match[1];
+function folderIdFromValue_(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  const id = match ? match[1] : text;
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    throw new Error(`Script Property ${PROPERTY_KEYS.debugParentFolderId} invalida.`);
+  }
+  return id;
 }
 
 function replaceDataRows_(sheet, columnCount, rows) {
