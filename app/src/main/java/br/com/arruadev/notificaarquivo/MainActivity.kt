@@ -60,6 +60,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -163,6 +164,10 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshState()
+        if (accessGranted && !NotificationCaptureService.isConnected()) {
+            CaptureHealthStore.setConnected(this, false)
+            NotificationCaptureService.requestReconnect(this)
+        }
     }
 
     override fun onStop() {
@@ -245,38 +250,55 @@ class MainActivity : ComponentActivity() {
         SheetsSyncMetadataStore.recordAttempt(this)
 
         lifecycleScope.launch {
-            runCatching {
-                val sheetsResult = withContext(Dispatchers.IO) {
+            val sheetsResult = try {
+                withContext(Dispatchers.IO) {
                     SheetsSyncClient.sync(
                         settings = currentSettings,
                         deviceId = DeviceInfo.id(this@MainActivity),
                         notifications = snapshot
                     )
                 }
-                NotificationStore.markSynced(this@MainActivity, snapshot)
-                SheetsSyncMetadataStore.recordSuccess(this@MainActivity, sheetsResult)
-
-                val reconcileResult = NotificationCaptureService.reconcileNow()
-                    ?: error("O servico de captura nao esta conectado.")
-                sheetsResult to reconcileResult
-            }.onSuccess { (sheetsResult, reconcileResult) ->
-                syncStatus = SyncStatus.Success(
-                    sheetsResult.inserted,
-                    sheetsResult.duplicates,
-                    sheetsResult.ignored
-                )
-                historySyncStatus = HistorySyncStatus.Success(
-                    removed = reconcileResult.removedCount,
-                    active = reconcileResult.activeCount
-                )
-                refreshState()
-            }.onFailure { error ->
+            } catch (error: Exception) {
                 val message = error.message ?: "Falha desconhecida."
                 SheetsSyncMetadataStore.recordFailure(this@MainActivity, message)
                 syncStatus = SyncStatus.Error(message)
                 historySyncStatus = HistorySyncStatus.Error(message)
+                return@launch
             }
+
+            NotificationStore.markSynced(this@MainActivity, snapshot)
+            SheetsSyncMetadataStore.recordSuccess(this@MainActivity, sheetsResult)
+            syncStatus = SyncStatus.Success(
+                sheetsResult.inserted,
+                sheetsResult.duplicates,
+                sheetsResult.ignored
+            )
+
+            val reconcileResult = awaitListenerReconciliation()
+            if (reconcileResult == null) {
+                historySyncStatus = HistorySyncStatus.Error(
+                    "O servico de captura nao conseguiu reconectar."
+                )
+            } else {
+                historySyncStatus = HistorySyncStatus.Success(
+                    removed = reconcileResult.removedCount,
+                    active = reconcileResult.activeCount
+                )
+            }
+            refreshState()
         }
+    }
+
+    private suspend fun awaitListenerReconciliation(): NotificationCaptureService.ReconcileResult? {
+        NotificationCaptureService.reconcileNow()?.let { return it }
+        CaptureHealthStore.setConnected(this, false)
+        NotificationCaptureService.requestReconnect(this)
+
+        repeat(20) {
+            delay(250)
+            NotificationCaptureService.reconcileNow()?.let { return it }
+        }
+        return null
     }
 }
 

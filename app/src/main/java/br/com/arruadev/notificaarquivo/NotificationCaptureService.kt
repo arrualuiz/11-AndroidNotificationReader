@@ -2,6 +2,7 @@ package br.com.arruadev.notificaarquivo
 
 import android.app.Notification
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -22,6 +23,12 @@ class NotificationCaptureService : NotificationListenerService() {
 
         fun reconcileNow(): ReconcileResult? =
             connectedInstance?.reconcileWithActiveNotifications()
+
+        fun requestReconnect(context: Context) {
+            requestRebind(ComponentName(context, NotificationCaptureService::class.java))
+        }
+
+        fun isConnected(): Boolean = connectedInstance != null
 
         fun dismissNow(notification: CapturedNotification): Boolean {
             val service = connectedInstance ?: return false
@@ -44,7 +51,6 @@ class NotificationCaptureService : NotificationListenerService() {
 
     override fun onCreate() {
         super.onCreate()
-        connectedInstance = this
         ContextCompat.registerReceiver(
             this,
             commandsReceiver,

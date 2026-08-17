@@ -8,7 +8,7 @@ Projeto inicial Android em Kotlin e Jetpack Compose. Esta primeira versao:
 - Guarda ate 2.000 itens localmente no aparelho.
 - Mostra o historico quando o aplicativo e reaberto.
 
-A versao 0.5.1 tambem consolida notificacoes identicas, atualiza a tela ao vivo,
+A versao 0.5.2 tambem consolida notificacoes identicas, atualiza a tela ao vivo,
 permite ocultar itens enviados, ignorar aplicativos repetitivos e sincroniza os registros
 automaticamente com um Google Sheets por meio de um endpoint do Apps Script.
 
