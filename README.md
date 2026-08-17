@@ -5,15 +5,19 @@ Projeto inicial Android em Kotlin e Jetpack Compose. Esta primeira versao:
 - Abre uma tela funcional, equivalente ao primeiro "Hello World" do projeto.
 - Leva o usuario a tela de acesso a notificacoes do Android.
 - Captura titulo e texto de novas notificacoes.
-- Guarda ate 500 itens localmente no aparelho.
+- Guarda ate 2.000 itens localmente no aparelho.
 - Mostra o historico quando o aplicativo e reaberto.
 
-A versao 0.2.0 tambem consolida notificacoes identicas, atualiza a tela ao vivo,
-permite limpar o historico, ignorar aplicativos repetitivos e enviar manualmente os
-registros para um Google Sheets por meio de um endpoint do Apps Script.
+A versao 0.3.0 tambem consolida notificacoes identicas, atualiza a tela ao vivo,
+permite limpar o historico, ignorar aplicativos repetitivos e sincroniza os registros
+automaticamente com um Google Sheets por meio de um endpoint do Apps Script.
 
-Ela ainda nao possui banco Room, login, sincronizacao automatica ou edicao de
-categorias dentro do Android.
+Cada registro fica pendente no aparelho ate o Sheets confirmar o recebimento. O app
+tenta enviar cerca de 15 segundos depois de uma notificacao e mantem uma verificacao
+periodica, com internet, a cada 15 minutos. O botao **Enviar agora** continua como
+alternativa manual.
+
+Ela ainda nao possui banco Room, login ou edicao de categorias dentro do Android.
 
 ## O que instalar
 
@@ -46,6 +50,19 @@ para sincronizar o Gradle, instalar SDKs, depurar e gerar o APK.
 Em aparelhos Xiaomi/MIUI, habilite tambem o inicio automatico do app e remova a
 restricao de bateria se a captura parar depois de algum tempo.
 
+Para o funcionamento mais automatico possivel no Redmi:
+
+1. Ative o acesso de notificacoes do **Notifica Arquivo**.
+2. Em **Configuracoes > Apps > Gerenciar apps > Notifica Arquivo**, ative
+   **Inicio automatico**.
+3. Em bateria/economia de bateria do aplicativo, escolha **Sem restricoes**.
+4. Nao use **Forcar parada** e nao revogue o acesso a notificacoes.
+
+Depois dessa configuracao inicial, nao e necessario manter a tela do aplicativo
+aberta. A captura e o envio usam servicos de segundo plano do Android. O envio nao e
+de horario exato: o Android pode adia-lo para economizar bateria. Sem internet, os
+itens permanecem pendentes e voltam a ser tentados quando a rede estiver disponivel.
+
 ## Como conectar ao Google Sheets
 
 Na pasta `google-sheets` existem tres entregaveis:
@@ -55,8 +72,8 @@ Na pasta `google-sheets` existem tres entregaveis:
 - `COMO-CONECTAR.md`: instrucoes completas de configuracao e implantacao.
 
 Depois de implantar o Apps Script como Aplicativo da Web, copie a URL `/exec` e o
-token para o painel **Google Sheets > Configurar** do aplicativo. O botao
-**Enviar agora** manda o historico local; IDs existentes nao sao duplicados.
+token para o painel **Google Sheets > Configurar** do aplicativo. Ao salvar, o envio
+automatico e ativado; IDs existentes nao sao duplicados.
 
 ## Onde comecar a ler o codigo
 
@@ -64,10 +81,11 @@ token para o painel **Google Sheets > Configurar** do aplicativo. O botao
 - `NotificationCaptureService.kt`: recebe cada notificacao nova.
 - `NotificationStore.kt`: salva e recupera os dados locais.
 - `SheetsSync.kt`: envia um lote JSON para o Apps Script.
+- `SheetsSyncWorker.kt`: agenda envios automaticos e novas tentativas.
 - `CapturedNotification.kt`: define os campos de uma notificacao.
 - `docs/ARQUITETURA.md`: desenho da evolucao para Sheets, dashboard e iOS.
 
 ## Proxima pequena entrega
 
-Substituir o armazenamento provisorio por Room, adicionar categorias editaveis no
-Android e agendar sincronizacao automatica somente em redes confiaveis.
+Substituir o armazenamento provisorio por Room e adicionar categorias editaveis no
+Android. Room sera importante quando o arquivo local crescer alem deste prototipo.

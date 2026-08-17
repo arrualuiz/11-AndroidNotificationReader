@@ -26,7 +26,7 @@ class NotificationCaptureService : NotificationListenerService() {
 
         if (title.isBlank() && text.isBlank()) return
 
-        NotificationStore.add(
+        val saved = NotificationStore.add(
             applicationContext,
             CapturedNotification(
                 id = "${posted.key}:${posted.postTime}",
@@ -38,6 +38,7 @@ class NotificationCaptureService : NotificationListenerService() {
                 postedAt = posted.postTime
             )
         )
+        if (saved) SyncScheduler.scheduleImmediate(applicationContext)
     }
 
     private fun appNameFor(packageName: String): String = try {

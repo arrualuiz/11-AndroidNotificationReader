@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -61,7 +60,7 @@ import java.time.format.DateTimeFormatter
 private sealed interface SyncStatus {
     data object Idle : SyncStatus
     data object Running : SyncStatus
-    data class Success(val inserted: Int, val duplicates: Int) : SyncStatus
+    data class Success(val inserted: Int, val duplicates: Int, val ignored: Int) : SyncStatus
     data class Error(val message: String) : SyncStatus
 }
 
@@ -70,6 +69,7 @@ class MainActivity : ComponentActivity() {
     private var ignoredApps by mutableStateOf<List<IgnoredApp>>(emptyList())
     private var accessGranted by mutableStateOf(false)
     private var syncSettings by mutableStateOf(SheetsSyncSettings())
+    private var syncMetadata by mutableStateOf(SheetsSyncMetadata())
     private var syncStatus by mutableStateOf<SyncStatus>(SyncStatus.Idle)
     private var receiverRegistered = false
 
@@ -82,6 +82,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         syncSettings = SheetsSyncSettingsStore.read(this)
+        syncMetadata = SheetsSyncMetadataStore.read(this)
+        SyncScheduler.schedulePeriodic(this)
+        SyncScheduler.scheduleImmediate(this)
 
         setContent {
             NotificaArquivoTheme {
@@ -90,8 +93,10 @@ class MainActivity : ComponentActivity() {
                     notifications = notifications,
                     ignoredApps = ignoredApps,
                     syncSettings = syncSettings,
+                    syncMetadata = syncMetadata,
                     syncStatus = syncStatus,
                     onOpenSettings = ::openNotificationAccessSettings,
+                    onOpenBatterySettings = ::openBatterySettings,
                     onClear = { NotificationStore.clear(this) },
                     onIgnoreApp = { packageName, appName ->
                         NotificationStore.ignorePackage(this, packageName, appName)
@@ -112,7 +117,10 @@ class MainActivity : ComponentActivity() {
             ContextCompat.registerReceiver(
                 this,
                 changesReceiver,
-                IntentFilter(NotificationStore.ACTION_CHANGED),
+                IntentFilter().apply {
+                    addAction(NotificationStore.ACTION_CHANGED)
+                    addAction(SheetsSyncMetadataStore.ACTION_CHANGED)
+                },
                 ContextCompat.RECEIVER_NOT_EXPORTED
             )
             receiverRegistered = true
@@ -137,48 +145,57 @@ class MainActivity : ComponentActivity() {
             .contains(packageName)
         notifications = NotificationStore.read(this)
         ignoredApps = NotificationStore.ignoredApps(this)
+        syncMetadata = SheetsSyncMetadataStore.read(this)
     }
 
     private fun openNotificationAccessSettings() {
         startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
     }
 
+    private fun openBatterySettings() {
+        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+    }
+
     private fun saveSyncSettings(settings: SheetsSyncSettings) {
-        SheetsSyncSettingsStore.save(this, settings)
-        syncSettings = settings
+        val sanitized = SheetsSyncSettings(settings.endpoint.trim(), settings.token.trim())
+        SheetsSyncSettingsStore.save(this, sanitized)
+        syncSettings = sanitized
         syncStatus = SyncStatus.Idle
+        SyncScheduler.schedulePeriodic(this)
+        SyncScheduler.scheduleImmediate(this)
     }
 
     private fun syncWithSheets() {
-        if (notifications.isEmpty()) {
-            syncStatus = SyncStatus.Error("Nao ha notificacoes para enviar.")
+        val snapshot = NotificationStore.pending(this)
+        if (snapshot.isEmpty()) {
+            syncStatus = SyncStatus.Success(0, 0, 0)
             return
         }
 
         val currentSettings = syncSettings
-        val snapshot = notifications
         syncStatus = SyncStatus.Running
+        SheetsSyncMetadataStore.recordAttempt(this)
 
         lifecycleScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
                     SheetsSyncClient.sync(
                         settings = currentSettings,
-                        deviceId = deviceId(),
+                        deviceId = DeviceInfo.id(this@MainActivity),
                         notifications = snapshot
                     )
                 }
             }.onSuccess { result ->
-                syncStatus = SyncStatus.Success(result.inserted, result.duplicates)
+                NotificationStore.markSynced(this@MainActivity, snapshot)
+                SheetsSyncMetadataStore.recordSuccess(this@MainActivity, result)
+                syncStatus = SyncStatus.Success(result.inserted, result.duplicates, result.ignored)
+                refreshState()
             }.onFailure { error ->
-                syncStatus = SyncStatus.Error(error.message ?: "Falha desconhecida.")
+                val message = error.message ?: "Falha desconhecida."
+                SheetsSyncMetadataStore.recordFailure(this@MainActivity, message)
+                syncStatus = SyncStatus.Error(message)
             }
         }
-    }
-
-    private fun deviceId(): String {
-        val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-        return "${Build.MANUFACTURER}-${Build.MODEL}-$androidId"
     }
 }
 
@@ -188,8 +205,10 @@ private fun NotificationArchiveScreen(
     notifications: List<CapturedNotification>,
     ignoredApps: List<IgnoredApp>,
     syncSettings: SheetsSyncSettings,
+    syncMetadata: SheetsSyncMetadata,
     syncStatus: SyncStatus,
     onOpenSettings: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
     onClear: () -> Unit,
     onIgnoreApp: (String, String) -> Unit,
     onAllowApp: (String) -> Unit,
@@ -214,12 +233,17 @@ private fun NotificationArchiveScreen(
             )
 
             Spacer(modifier = Modifier.height(16.dp))
-            AccessPanel(accessGranted = accessGranted, onOpenSettings = onOpenSettings)
+            AccessPanel(
+                accessGranted = accessGranted,
+                onOpenSettings = onOpenSettings,
+                onOpenBatterySettings = onOpenBatterySettings
+            )
             Spacer(modifier = Modifier.height(10.dp))
             SheetsPanel(
                 settings = syncSettings,
+                metadata = syncMetadata,
                 status = syncStatus,
-                notificationCount = notifications.size,
+                pendingCount = notifications.count { it.syncedAt == null },
                 onConfigure = { showSyncDialog = true },
                 onSync = onSync
             )
@@ -318,7 +342,11 @@ private fun NotificationArchiveScreen(
 }
 
 @Composable
-private fun AccessPanel(accessGranted: Boolean, onOpenSettings: () -> Unit) {
+private fun AccessPanel(
+    accessGranted: Boolean,
+    onOpenSettings: () -> Unit,
+    onOpenBatterySettings: () -> Unit
+) {
     val container = if (accessGranted) Color(0xFFDCEFE8) else Color(0xFFFFE8D6)
     val content = if (accessGranted) Color(0xFF16483E) else Color(0xFF6E3515)
 
@@ -347,8 +375,15 @@ private fun AccessPanel(accessGranted: Boolean, onOpenSettings: () -> Unit) {
                     fontSize = 13.sp
                 )
             }
-            TextButton(onClick = onOpenSettings) {
-                Text(if (accessGranted) "Revisar" else "Permitir")
+            Column(horizontalAlignment = Alignment.End) {
+                TextButton(onClick = onOpenSettings) {
+                    Text(if (accessGranted) "Revisar" else "Permitir")
+                }
+                if (accessGranted) {
+                    TextButton(onClick = onOpenBatterySettings) {
+                        Text("Bateria")
+                    }
+                }
             }
         }
     }
@@ -357,12 +392,13 @@ private fun AccessPanel(accessGranted: Boolean, onOpenSettings: () -> Unit) {
 @Composable
 private fun SheetsPanel(
     settings: SheetsSyncSettings,
+    metadata: SheetsSyncMetadata,
     status: SyncStatus,
-    notificationCount: Int,
+    pendingCount: Int,
     onConfigure: () -> Unit,
     onSync: () -> Unit
 ) {
-    val configured = settings.endpoint.startsWith("https://") && settings.token.isNotBlank()
+    val configured = settings.isConfigured()
     Card(
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFECE8F3)),
@@ -373,7 +409,7 @@ private fun SheetsPanel(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Google Sheets", fontWeight = FontWeight.Bold, color = Color(0xFF403652))
                     Text(
-                        text = syncStatusText(status, configured),
+                        text = syncStatusText(status, configured, pendingCount, metadata),
                         color = Color(0xFF574D68),
                         fontSize = 13.sp
                     )
@@ -386,7 +422,7 @@ private fun SheetsPanel(
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(
                     onClick = onSync,
-                    enabled = notificationCount > 0 && status !is SyncStatus.Running,
+                    enabled = pendingCount > 0 && status !is SyncStatus.Running,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(if (status is SyncStatus.Running) "Enviando..." else "Enviar agora")
@@ -396,10 +432,25 @@ private fun SheetsPanel(
     }
 }
 
-private fun syncStatusText(status: SyncStatus, configured: Boolean): String = when (status) {
-    SyncStatus.Idle -> if (configured) "Pronto para sincronizar manualmente." else "Endpoint ainda nao configurado."
+private fun syncStatusText(
+    status: SyncStatus,
+    configured: Boolean,
+    pendingCount: Int,
+    metadata: SheetsSyncMetadata
+): String = when (status) {
+    SyncStatus.Idle -> when {
+        !configured -> "Endpoint ainda nao configurado."
+        metadata.lastError.isNotBlank() -> "Automatico ativo; ultima tentativa falhou: ${metadata.lastError}"
+        pendingCount > 0 -> "Automatico ativo; $pendingCount aguardando envio."
+        metadata.lastSuccessAt > 0 -> "Automatico ativo; sincronizado em ${formatTimestamp(metadata.lastSuccessAt)}."
+        else -> "Automatico ativo; aguardando notificacoes."
+    }
     SyncStatus.Running -> "Enviando notificacoes..."
-    is SyncStatus.Success -> "${status.inserted} novas; ${status.duplicates} ja estavam na planilha."
+    is SyncStatus.Success -> if (status.inserted + status.duplicates + status.ignored == 0) {
+        "Tudo sincronizado; nenhuma pendencia."
+    } else {
+        "${status.inserted} novas; ${status.duplicates} repetidas; ${status.ignored} filtradas."
+    }
     is SyncStatus.Error -> status.message
 }
 

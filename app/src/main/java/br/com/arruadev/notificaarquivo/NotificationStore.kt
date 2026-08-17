@@ -12,7 +12,7 @@ object NotificationStore {
     private const val PREFERENCES_NAME = "notification_archive"
     private const val NOTIFICATIONS_KEY = "notifications"
     private const val IGNORED_APPS_KEY = "ignored_apps"
-    private const val MAX_ITEMS = 500
+    private const val MAX_ITEMS = 2_000
     private const val DUPLICATE_WINDOW_MS = 10 * 60 * 1_000L
 
     @Synchronized
@@ -49,6 +49,30 @@ object NotificationStore {
         val compacted = collapseDuplicates(original)
         if (compacted != original) writeNotifications(context, compacted)
         return compacted
+    }
+
+    @Synchronized
+    fun pending(context: Context): List<CapturedNotification> =
+        read(context).filter { it.syncedAt == null }
+
+    @Synchronized
+    fun markSynced(
+        context: Context,
+        sentNotifications: List<CapturedNotification>,
+        syncedAt: Long = System.currentTimeMillis()
+    ) {
+        if (sentNotifications.isEmpty()) return
+
+        val sentVersions = sentNotifications.associate { it.id to it.postedAt }
+        val updated = readInternal(context).map { current ->
+            if (sentVersions[current.id] == current.postedAt) {
+                current.copy(syncedAt = syncedAt)
+            } else {
+                current
+            }
+        }
+        writeNotifications(context, updated)
+        notifyChanged(context)
     }
 
     @Synchronized
@@ -153,6 +177,7 @@ object NotificationStore {
         put("text", text)
         put("postedAt", postedAt)
         put("category", category)
+        put("syncedAt", syncedAt ?: JSONObject.NULL)
     }
 
     private fun JSONObject.toNotification() = CapturedNotification(
@@ -163,6 +188,7 @@ object NotificationStore {
         title = optString("title"),
         text = optString("text"),
         postedAt = getLong("postedAt"),
-        category = optString("category", "Sem categoria")
+        category = optString("category", "Sem categoria"),
+        syncedAt = if (isNull("syncedAt")) null else optLong("syncedAt")
     )
 }

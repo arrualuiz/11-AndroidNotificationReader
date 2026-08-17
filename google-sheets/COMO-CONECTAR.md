@@ -40,14 +40,29 @@ OAuth nesta primeira versao. O script rejeita requisicoes cujo token nao confere
 
 ## Configurar o Android
 
-1. Instale a versao 0.2.0 do Notifica Arquivo.
+1. Instale a versao 0.3.0 do Notifica Arquivo.
 2. Abra o painel **Google Sheets** e toque em **Configurar**.
 3. Cole a URL `/exec` da implantacao.
 4. Informe exatamente o token usado em `configurarToken`.
-5. Salve e toque em **Enviar agora**.
+5. Salve. O primeiro envio sera agendado automaticamente.
 
-O aplicativo envia todos os registros locais. O Apps Script compara a coluna `ID`,
-grava apenas novidades e informa quantos itens ja existiam.
+O aplicativo envia os registros pendentes. O Apps Script compara a coluna `ID`,
+grava apenas novidades e informa quantos itens ja existiam. Depois da confirmacao,
+o Android marca o registro como sincronizado. **Enviar agora** serve para antecipar
+uma tentativa, mas nao precisa ser usado no dia a dia.
+
+## Funcionamento automatico
+
+- Uma nova notificacao agenda um envio para cerca de 15 segundos depois.
+- Uma verificacao de seguranca roda periodicamente, em intervalos minimos de 15 minutos.
+- O trabalho exige conexao de rede. Sem internet, os registros ficam pendentes.
+- O agendamento sobrevive ao fechamento do app e a reinicializacao do aparelho.
+- O Android escolhe o instante real da execucao para preservar bateria.
+
+No Xiaomi/MIUI, abra as configuracoes do **Notifica Arquivo**, ative **Inicio
+automatico** e selecione **Sem restricoes** na economia de bateria. Dentro do app,
+o botao **Bateria** abre a tela geral dessas configuracoes. Nao use **Forcar parada**:
+o Android bloqueia tarefas de segundo plano ate o aplicativo ser aberto novamente.
 
 ## Privacidade
 
@@ -56,4 +71,3 @@ que tenha acesso ao aparelho ou ao APK configurado. Nao publique a planilha na w
 nao use o Netlify para expor diretamente a aba `Notificacoes`. Antes de trabalhar com
 notificacoes bancarias reais, mantenha filtros locais e adicione autenticacao ao
 dashboard.
-

@@ -8,7 +8,8 @@ data class CapturedNotification(
     val title: String,
     val text: String,
     val postedAt: Long,
-    val category: String = "Sem categoria"
+    val category: String = "Sem categoria",
+    val syncedAt: Long? = null
 )
 
 data class IgnoredApp(
