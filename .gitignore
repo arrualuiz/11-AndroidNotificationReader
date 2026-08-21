@@ -12,6 +12,9 @@ app/build/
 *.log
 google-services.json
 secrets.properties
+.env
+.env.*
+!.env.example
 captures/
 .externalNativeBuild/
 .cxx/

@@ -1,9 +1,13 @@
 package br.com.arruadev.notificaarquivo
 
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
@@ -29,6 +33,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -56,6 +61,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -92,6 +98,7 @@ class MainActivity : ComponentActivity() {
     private var ignoredApps by mutableStateOf<List<IgnoredApp>>(emptyList())
     private var hiddenNotifications by mutableStateOf<List<HiddenNotification>>(emptyList())
     private var captureHealth by mutableStateOf(CaptureHealth())
+    private var diagnosticEntries by mutableStateOf<List<DiagnosticEntry>>(emptyList())
     private var batteryUnrestricted by mutableStateOf(false)
     private var accessGranted by mutableStateOf(false)
     private var syncSettings by mutableStateOf(SheetsSyncSettings())
@@ -112,6 +119,12 @@ class MainActivity : ComponentActivity() {
         syncMetadata = SheetsSyncMetadataStore.read(this)
         SyncScheduler.schedulePeriodic(this)
         SyncScheduler.scheduleImmediate(this)
+        CaptureRecoveryScheduler.schedulePeriodic(this)
+        DiagnosticLogStore.info(
+            this,
+            "MainActivity",
+            "App iniciado: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}."
+        )
 
         setContent {
             NotificaArquivoTheme {
@@ -121,6 +134,7 @@ class MainActivity : ComponentActivity() {
                     ignoredApps = ignoredApps,
                     hiddenNotifications = hiddenNotifications,
                     captureHealth = captureHealth,
+                    diagnosticEntries = diagnosticEntries,
                     batteryUnrestricted = batteryUnrestricted,
                     syncSettings = syncSettings,
                     syncMetadata = syncMetadata,
@@ -128,6 +142,11 @@ class MainActivity : ComponentActivity() {
                     historySyncStatus = historySyncStatus,
                     onOpenSettings = ::openNotificationAccessSettings,
                     onOpenBatterySettings = ::openBatterySettings,
+                    onOpenAppSettings = ::openAppSettings,
+                    onCheckCapture = ::runCaptureDiagnostic,
+                    onReconnectCapture = { requestCaptureReconnect("comando manual") },
+                    onCopyDiagnostics = ::copyDiagnosticReport,
+                    onClearDiagnostics = ::clearDiagnosticLog,
                     onDismissNotification = { item ->
                         NotificationCommands.dismiss(this, item)
                     },
@@ -160,6 +179,7 @@ class MainActivity : ComponentActivity() {
                     addAction(NotificationStore.ACTION_CHANGED)
                     addAction(SheetsSyncMetadataStore.ACTION_CHANGED)
                     addAction(CaptureHealthStore.ACTION_CHANGED)
+                    addAction(DiagnosticLogStore.ACTION_CHANGED)
                 },
                 ContextCompat.RECEIVER_NOT_EXPORTED
             )
@@ -171,8 +191,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         refreshState()
         if (accessGranted && !NotificationCaptureService.isConnected()) {
-            CaptureHealthStore.setConnected(this, false)
-            NotificationCaptureService.requestReconnect(this)
+            requestCaptureReconnect("app em primeiro plano")
         }
     }
 
@@ -191,6 +210,7 @@ class MainActivity : ComponentActivity() {
         ignoredApps = NotificationStore.ignoredApps(this)
         hiddenNotifications = NotificationStore.hiddenNotifications(this)
         captureHealth = CaptureHealthStore.read(this)
+        diagnosticEntries = DiagnosticLogStore.read(this)
         batteryUnrestricted = getSystemService(PowerManager::class.java)
             .isIgnoringBatteryOptimizations(packageName)
         syncMetadata = SheetsSyncMetadataStore.read(this)
@@ -202,6 +222,137 @@ class MainActivity : ComponentActivity() {
 
     private fun openBatterySettings() {
         startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+    }
+
+    private fun openAppSettings() {
+        startActivity(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:$packageName")
+            )
+        )
+    }
+
+    private fun requestCaptureReconnect(reason: String) {
+        val granted = NotificationManagerCompat.getEnabledListenerPackages(this)
+            .contains(packageName)
+        if (!granted) {
+            DiagnosticLogStore.warn(
+                this,
+                "MainActivity",
+                "Reconexao bloqueada: acesso a notificacoes nao concedido."
+            )
+            refreshState()
+            return
+        }
+        if (NotificationCaptureService.isConnected()) {
+            DiagnosticLogStore.info(this, "MainActivity", "Servico ja estava conectado.")
+            refreshState()
+            return
+        }
+
+        NotificationCaptureService.requestReconnect(this, reason)
+        lifecycleScope.launch {
+            delay(8_000)
+            if (!NotificationCaptureService.isConnected()) {
+                val message = "O Android nao confirmou a reconexao em 8 segundos."
+                CaptureHealthStore.recordReconnectFailure(this@MainActivity, message)
+                DiagnosticLogStore.warn(this@MainActivity, "MainActivity", message)
+            }
+            refreshState()
+        }
+    }
+
+    private fun runCaptureDiagnostic() {
+        DiagnosticLogStore.info(this, "Diagnostico", "Verificacao manual iniciada.")
+        val granted = NotificationManagerCompat.getEnabledListenerPackages(this)
+            .contains(packageName)
+        if (!granted) {
+            val message = "Falha: acesso a notificacoes nao concedido."
+            CaptureHealthStore.recordReconnectFailure(this, message)
+            DiagnosticLogStore.warn(this, "Diagnostico", message)
+            refreshState()
+            return
+        }
+
+        val immediateResult = NotificationCaptureService.reconcileNow()
+        if (immediateResult != null) {
+            if (immediateResult.error == null) {
+                DiagnosticLogStore.info(
+                    this,
+                    "Diagnostico",
+                    "Servico respondeu: ${immediateResult.activeCount} ativas, " +
+                        "${immediateResult.removedCount} removidas."
+                )
+            } else {
+                CaptureHealthStore.recordError(this, immediateResult.error)
+                DiagnosticLogStore.warn(this, "Diagnostico", immediateResult.error)
+            }
+            refreshState()
+            return
+        }
+
+        NotificationCaptureService.requestReconnect(this, "verificacao manual")
+        lifecycleScope.launch {
+            var result: NotificationCaptureService.ReconcileResult? = null
+            for (attempt in 0 until 32) {
+                delay(250)
+                val candidate = NotificationCaptureService.reconcileNow()
+                if (candidate != null) {
+                    result = candidate
+                    break
+                }
+            }
+            val finalResult = result
+            if (finalResult == null) {
+                val message = "Falha: listener nao respondeu em 8 segundos."
+                CaptureHealthStore.recordReconnectFailure(this@MainActivity, message)
+                DiagnosticLogStore.warn(this@MainActivity, "Diagnostico", message)
+            } else if (finalResult.error != null) {
+                CaptureHealthStore.recordError(this@MainActivity, finalResult.error)
+                DiagnosticLogStore.warn(this@MainActivity, "Diagnostico", finalResult.error)
+            } else {
+                DiagnosticLogStore.info(
+                    this@MainActivity,
+                    "Diagnostico",
+                    "Reconectado: ${finalResult.activeCount} ativas, " +
+                        "${finalResult.removedCount} removidas."
+                )
+            }
+            refreshState()
+        }
+    }
+
+    private fun copyDiagnosticReport() {
+        refreshState()
+        val currentHealth = captureHealth
+        val report = buildString {
+            appendLine("Notifica Arquivo - Diagnostico")
+            appendLine("Versao: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            appendLine("Dispositivo: ${Build.MANUFACTURER} ${Build.MODEL}")
+            appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+            appendLine("Acesso: ${if (accessGranted) "concedido" else "bloqueado"}")
+            appendLine("Listener: ${if (currentHealth.listenerConnected) "conectado" else "desconectado"}")
+            appendLine("Bateria: ${if (batteryUnrestricted) "sem restricao" else "otimizacao ativa"}")
+            appendLine("Ultima conexao: ${formatOptionalTimestamp(currentHealth.lastConnectedAt)}")
+            appendLine("Ultima desconexao: ${formatOptionalTimestamp(currentHealth.lastDisconnectedAt)}")
+            appendLine("Ultima captura: ${formatOptionalTimestamp(currentHealth.lastNotificationAt)}")
+            appendLine("Ultima tentativa: ${formatOptionalTimestamp(currentHealth.lastReconnectAttemptAt)}")
+            appendLine("Tentativas: ${currentHealth.reconnectAttemptCount}")
+            appendLine("Ultimo erro: ${currentHealth.lastError.ifBlank { "nenhum" }}")
+            appendLine()
+            appendLine("Eventos recentes:")
+            diagnosticEntries.takeLast(200).forEach { appendLine(it.displayLine()) }
+        }
+        getSystemService(ClipboardManager::class.java)
+            .setPrimaryClip(ClipData.newPlainText("Diagnostico Notifica Arquivo", report))
+        DiagnosticLogStore.info(this, "Diagnostico", "Relatorio copiado.")
+    }
+
+    private fun clearDiagnosticLog() {
+        DiagnosticLogStore.clear(this)
+        DiagnosticLogStore.info(this, "Diagnostico", "Log limpo pelo usuario.")
+        refreshState()
     }
 
     private fun saveSyncSettings(settings: SheetsSyncSettings) {
@@ -285,6 +436,8 @@ class MainActivity : ComponentActivity() {
                 historySyncStatus = HistorySyncStatus.Error(
                     "O servico de captura nao conseguiu reconectar."
                 )
+            } else if (reconcileResult.error != null) {
+                historySyncStatus = HistorySyncStatus.Error(reconcileResult.error)
             } else {
                 historySyncStatus = HistorySyncStatus.Success(
                     removed = reconcileResult.removedCount,
@@ -297,10 +450,10 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun awaitListenerReconciliation(): NotificationCaptureService.ReconcileResult? {
         NotificationCaptureService.reconcileNow()?.let { return it }
-        CaptureHealthStore.setConnected(this, false)
-        NotificationCaptureService.requestReconnect(this)
+        CaptureHealthStore.recordDisconnected(this, "Aguardando reconciliacao manual.")
+        NotificationCaptureService.requestReconnect(this, "sincronizacao do historico")
 
-        repeat(20) {
+        repeat(32) {
             delay(250)
             NotificationCaptureService.reconcileNow()?.let { return it }
         }
@@ -315,6 +468,7 @@ private fun NotificationArchiveScreen(
     ignoredApps: List<IgnoredApp>,
     hiddenNotifications: List<HiddenNotification>,
     captureHealth: CaptureHealth,
+    diagnosticEntries: List<DiagnosticEntry>,
     batteryUnrestricted: Boolean,
     syncSettings: SheetsSyncSettings,
     syncMetadata: SheetsSyncMetadata,
@@ -322,6 +476,11 @@ private fun NotificationArchiveScreen(
     historySyncStatus: HistorySyncStatus,
     onOpenSettings: () -> Unit,
     onOpenBatterySettings: () -> Unit,
+    onOpenAppSettings: () -> Unit,
+    onCheckCapture: () -> Unit,
+    onReconnectCapture: () -> Unit,
+    onCopyDiagnostics: () -> Unit,
+    onClearDiagnostics: () -> Unit,
     onDismissNotification: (CapturedNotification) -> Unit,
     onHideNotification: (CapturedNotification) -> Unit,
     onHistorySync: () -> Unit,
@@ -337,7 +496,7 @@ private fun NotificationArchiveScreen(
     var pendingIgnore by remember { mutableStateOf<CapturedNotification?>(null) }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
     var unseenIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var knownIds by remember { mutableStateOf(notifications.mapTo(mutableSetOf()) { it.id }) }
+    var knownIds by remember { mutableStateOf(notifications.map { it.id }.toSet()) }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     val categories = notifications.map { it.category }.distinct().sorted()
@@ -346,7 +505,7 @@ private fun NotificationArchiveScreen(
     } ?: notifications
 
     LaunchedEffect(notifications) {
-        val currentIds = notifications.mapTo(mutableSetOf()) { it.id }
+        val currentIds = notifications.map { it.id }.toSet()
         val newIds = currentIds - knownIds
         if (newIds.isNotEmpty()) {
             val atTop = listState.firstVisibleItemIndex == 0 &&
@@ -381,10 +540,16 @@ private fun NotificationArchiveScreen(
         CaptureSettingsScreen(
             accessGranted = accessGranted,
             captureHealth = captureHealth,
+            diagnosticEntries = diagnosticEntries,
             batteryUnrestricted = batteryUnrestricted,
             onBack = { showCaptureSettings = false },
             onOpenSettings = onOpenSettings,
-            onOpenBatterySettings = onOpenBatterySettings
+            onOpenBatterySettings = onOpenBatterySettings,
+            onOpenAppSettings = onOpenAppSettings,
+            onCheckCapture = onCheckCapture,
+            onReconnectCapture = onReconnectCapture,
+            onCopyDiagnostics = onCopyDiagnostics,
+            onClearDiagnostics = onClearDiagnostics
         )
         return
     }
@@ -404,7 +569,7 @@ private fun NotificationArchiveScreen(
             Spacer(modifier = Modifier.height(16.dp))
             AccessPanel(
                 accessGranted = accessGranted,
-                listenerConnected = captureHealth.listenerConnected,
+                captureHealth = captureHealth,
                 onConfigure = { showCaptureSettings = true }
             )
             Spacer(modifier = Modifier.height(10.dp))
@@ -559,10 +724,10 @@ private fun historySyncStatusText(status: HistorySyncStatus, itemCount: Int): St
 @Composable
 private fun AccessPanel(
     accessGranted: Boolean,
-    listenerConnected: Boolean,
+    captureHealth: CaptureHealth,
     onConfigure: () -> Unit
 ) {
-    val active = accessGranted && listenerConnected
+    val active = accessGranted && captureHealth.listenerConnected
     val container = if (active) Color(0xFFDCEFE8) else Color(0xFFFFE8D6)
     val content = if (active) Color(0xFF16483E) else Color(0xFF6E3515)
 
@@ -590,8 +755,12 @@ private fun AccessPanel(
                 Text(
                     text = if (!accessGranted) {
                         "Acesso nao concedido"
-                    } else if (!listenerConnected) {
-                        "Servico reconectando"
+                    } else if (!captureHealth.listenerConnected &&
+                        captureHealth.lastReconnectAttemptAt > 0
+                    ) {
+                        "Desconectado; tentativa ${formatTimestamp(captureHealth.lastReconnectAttemptAt)}"
+                    } else if (!captureHealth.listenerConnected) {
+                        "Servico desconectado"
                     } else {
                         "Servico conectado"
                     },
@@ -610,18 +779,34 @@ private fun AccessPanel(
 private fun CaptureSettingsScreen(
     accessGranted: Boolean,
     captureHealth: CaptureHealth,
+    diagnosticEntries: List<DiagnosticEntry>,
     batteryUnrestricted: Boolean,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenBatterySettings: () -> Unit
+    onOpenBatterySettings: () -> Unit,
+    onOpenAppSettings: () -> Unit,
+    onCheckCapture: () -> Unit,
+    onReconnectCapture: () -> Unit,
+    onCopyDiagnostics: () -> Unit,
+    onClearDiagnostics: () -> Unit
 ) {
     Surface(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 20.dp)
+        ) {
             TextButton(onClick = onBack) { Text("Voltar") }
             Text(
-                text = "Configuracao de captura",
+                text = "Diagnostico de captura",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "Estado real do listener e eventos recentes deste aparelho.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp
             )
             Spacer(modifier = Modifier.height(20.dp))
             DiagnosticRow(
@@ -637,13 +822,29 @@ private fun CaptureSettingsScreen(
                 healthy = captureHealth.listenerConnected
             )
             DiagnosticRow(
+                label = "Ultima conexao",
+                value = formatOptionalTimestamp(captureHealth.lastConnectedAt),
+                healthy = captureHealth.lastConnectedAt > 0
+            )
+            DiagnosticRow(
+                label = "Ultima desconexao",
+                value = formatOptionalTimestamp(captureHealth.lastDisconnectedAt),
+                healthy = captureHealth.lastDisconnectedAt == 0L || captureHealth.listenerConnected
+            )
+            DiagnosticRow(
                 label = "Ultima captura",
-                value = if (captureHealth.lastNotificationAt > 0) {
-                    formatTimestamp(captureHealth.lastNotificationAt)
+                value = formatOptionalTimestamp(captureHealth.lastNotificationAt),
+                healthy = captureHealth.lastNotificationAt > 0
+            )
+            DiagnosticRow(
+                label = "Ultima tentativa de reconexao",
+                value = if (captureHealth.lastReconnectAttemptAt > 0) {
+                    "${formatTimestamp(captureHealth.lastReconnectAttemptAt)} " +
+                        "(${captureHealth.reconnectAttemptCount} tentativas)"
                 } else {
                     "Nenhuma"
                 },
-                healthy = captureHealth.lastNotificationAt > 0
+                healthy = captureHealth.listenerConnected
             )
             DiagnosticRow(
                 label = "Otimizacao de bateria",
@@ -652,6 +853,83 @@ private fun CaptureSettingsScreen(
                 action = "Abrir",
                 onAction = onOpenBatterySettings
             )
+
+            if (captureHealth.lastError.isNotBlank()) {
+                Surface(
+                    color = Color(0xFFFFE8D6),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Ultimo problema",
+                            color = Color(0xFF6E3515),
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = captureHealth.lastError,
+                            color = Color(0xFF6E3515),
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+            Text("Comandos seguros", fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(onClick = onCheckCapture, modifier = Modifier.fillMaxWidth()) {
+                Text("Verificar servico agora")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(onClick = onReconnectCapture, modifier = Modifier.fillMaxWidth()) {
+                Text("Solicitar reconexao")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(onClick = onCopyDiagnostics, modifier = Modifier.fillMaxWidth()) {
+                Text("Copiar relatorio")
+            }
+            TextButton(onClick = onClearDiagnostics, modifier = Modifier.fillMaxWidth()) {
+                Text("Limpar eventos")
+            }
+            TextButton(onClick = onOpenAppSettings, modifier = Modifier.fillMaxWidth()) {
+                Text("Abrir detalhes do app")
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+            Text("Terminal de eventos", fontWeight = FontWeight.Bold)
+            Text(
+                text = "Os registros ficam no aparelho por 7 dias e nao incluem texto de notificacoes.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                color = Color(0xFF161A18),
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 180.dp, max = 320.dp)
+            ) {
+                SelectionContainer {
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            text = diagnosticEntries.asReversed().take(100)
+                                .joinToString("\n") { it.displayLine() }
+                                .ifBlank { "Nenhum evento registrado." },
+                            color = Color(0xFFB8E8C7),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
         }
     }
 }
@@ -1048,7 +1326,7 @@ private fun SyncSettingsDialog(
         title = { Text("Conectar ao Sheets") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Cole a URL da implantacao do Apps Script e o token definido no script.")
+                Text("Cole a URL da implantacao e o token salvo nas Script Properties.")
                 OutlinedTextField(
                     value = endpoint,
                     onValueChange = { endpoint = it },
@@ -1082,6 +1360,9 @@ private fun formatTimestamp(timestamp: Long): String = DateTimeFormatter
     .ofPattern("dd/MM HH:mm")
     .withZone(ZoneId.systemDefault())
     .format(Instant.ofEpochMilli(timestamp))
+
+private fun formatOptionalTimestamp(timestamp: Long): String =
+    if (timestamp > 0) formatTimestamp(timestamp) else "Nenhuma"
 
 private val LightColors = lightColorScheme(
     primary = Color(0xFF146C60),

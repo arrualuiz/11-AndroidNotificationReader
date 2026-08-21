@@ -27,6 +27,11 @@ class SheetsSyncWorker(
         val pending = NotificationStore.pending(applicationContext)
         if (pending.isEmpty()) return@withContext Result.success()
 
+        DiagnosticLogStore.info(
+            applicationContext,
+            "SheetsSync",
+            "Sincronizacao automatica iniciada: ${pending.size} pendentes."
+        )
         SheetsSyncMetadataStore.recordAttempt(applicationContext)
         try {
             val result = SheetsSyncClient.sync(
@@ -36,6 +41,12 @@ class SheetsSyncWorker(
             )
             NotificationStore.markSynced(applicationContext, pending)
             SheetsSyncMetadataStore.recordSuccess(applicationContext, result)
+            DiagnosticLogStore.info(
+                applicationContext,
+                "SheetsSync",
+                "Sincronizacao concluida: ${result.inserted} inseridas, " +
+                    "${result.duplicates} duplicadas, ${result.ignored} ignoradas."
+            )
             Result.success()
         } catch (error: SheetsSyncException) {
             handleFailure(error.message.orEmpty(), error.retryable)
@@ -50,6 +61,11 @@ class SheetsSyncWorker(
 
     private fun handleFailure(message: String, retryable: Boolean): Result {
         SheetsSyncMetadataStore.recordFailure(applicationContext, message)
+        DiagnosticLogStore.warn(
+            applicationContext,
+            "SheetsSync",
+            "Falha de sincronizacao: $message; retry=$retryable."
+        )
         return if (retryable) Result.retry() else Result.failure()
     }
 }

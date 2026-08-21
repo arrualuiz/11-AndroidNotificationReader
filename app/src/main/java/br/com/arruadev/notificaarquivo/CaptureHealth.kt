@@ -6,7 +6,11 @@ import android.content.Intent
 data class CaptureHealth(
     val listenerConnected: Boolean = false,
     val lastConnectedAt: Long = 0,
-    val lastNotificationAt: Long = 0
+    val lastDisconnectedAt: Long = 0,
+    val lastNotificationAt: Long = 0,
+    val lastReconnectAttemptAt: Long = 0,
+    val reconnectAttemptCount: Int = 0,
+    val lastError: String = ""
 )
 
 object CaptureHealthStore {
@@ -15,14 +19,22 @@ object CaptureHealthStore {
     private const val PREFERENCES_NAME = "capture_health"
     private const val CONNECTED_KEY = "listener_connected"
     private const val LAST_CONNECTED_KEY = "last_connected"
+    private const val LAST_DISCONNECTED_KEY = "last_disconnected"
     private const val LAST_NOTIFICATION_KEY = "last_notification"
+    private const val LAST_RECONNECT_ATTEMPT_KEY = "last_reconnect_attempt"
+    private const val RECONNECT_ATTEMPT_COUNT_KEY = "reconnect_attempt_count"
+    private const val LAST_ERROR_KEY = "last_error"
 
     fun read(context: Context): CaptureHealth {
         val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
         return CaptureHealth(
             listenerConnected = preferences.getBoolean(CONNECTED_KEY, false),
             lastConnectedAt = preferences.getLong(LAST_CONNECTED_KEY, 0),
-            lastNotificationAt = preferences.getLong(LAST_NOTIFICATION_KEY, 0)
+            lastDisconnectedAt = preferences.getLong(LAST_DISCONNECTED_KEY, 0),
+            lastNotificationAt = preferences.getLong(LAST_NOTIFICATION_KEY, 0),
+            lastReconnectAttemptAt = preferences.getLong(LAST_RECONNECT_ATTEMPT_KEY, 0),
+            reconnectAttemptCount = preferences.getInt(RECONNECT_ATTEMPT_COUNT_KEY, 0),
+            lastError = preferences.getString(LAST_ERROR_KEY, "").orEmpty()
         )
     }
 
@@ -30,8 +42,49 @@ object CaptureHealthStore {
         val editor = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(CONNECTED_KEY, connected)
-        if (connected) editor.putLong(LAST_CONNECTED_KEY, System.currentTimeMillis())
+        if (connected) {
+            editor
+                .putLong(LAST_CONNECTED_KEY, System.currentTimeMillis())
+                .putString(LAST_ERROR_KEY, "")
+        }
         editor.apply()
+        notifyChanged(context)
+    }
+
+    fun recordDisconnected(context: Context, reason: String) {
+        context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(CONNECTED_KEY, false)
+            .putLong(LAST_DISCONNECTED_KEY, System.currentTimeMillis())
+            .putString(LAST_ERROR_KEY, reason.take(300))
+            .apply()
+        notifyChanged(context)
+    }
+
+    fun recordReconnectAttempt(context: Context) {
+        val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+        preferences.edit()
+            .putBoolean(CONNECTED_KEY, false)
+            .putLong(LAST_RECONNECT_ATTEMPT_KEY, System.currentTimeMillis())
+            .putInt(RECONNECT_ATTEMPT_COUNT_KEY, preferences.getInt(RECONNECT_ATTEMPT_COUNT_KEY, 0) + 1)
+            .apply()
+        notifyChanged(context)
+    }
+
+    fun recordReconnectFailure(context: Context, message: String) {
+        context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(CONNECTED_KEY, false)
+            .putString(LAST_ERROR_KEY, message.take(300))
+            .apply()
+        notifyChanged(context)
+    }
+
+    fun recordError(context: Context, message: String) {
+        context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(LAST_ERROR_KEY, message.take(300))
+            .apply()
         notifyChanged(context)
     }
 

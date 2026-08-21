@@ -37,21 +37,37 @@ class SheetsSyncException(message: String, val retryable: Boolean) : Exception(m
 object SheetsSyncSettingsStore {
     private const val PREFERENCES_NAME = "sheets_sync"
     private const val ENDPOINT_KEY = "endpoint"
-    private const val TOKEN_KEY = "token"
+    private const val ENCRYPTED_TOKEN_KEY = "token_encrypted"
+    private const val LEGACY_TOKEN_KEY = "token"
 
     fun read(context: Context): SheetsSyncSettings {
         val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+        val encryptedToken = preferences.getString(ENCRYPTED_TOKEN_KEY, "").orEmpty()
+        val legacyToken = preferences.getString(LEGACY_TOKEN_KEY, "").orEmpty()
+        val token = when {
+            encryptedToken.isNotEmpty() -> runCatching { SecureTokenStore.decrypt(encryptedToken) }
+                .getOrDefault("")
+            legacyToken.isNotEmpty() -> legacyToken.also {
+                preferences.edit()
+                    .putString(ENCRYPTED_TOKEN_KEY, SecureTokenStore.encrypt(it))
+                    .remove(LEGACY_TOKEN_KEY)
+                    .apply()
+            }
+            else -> ""
+        }
         return SheetsSyncSettings(
             endpoint = preferences.getString(ENDPOINT_KEY, "").orEmpty(),
-            token = preferences.getString(TOKEN_KEY, "").orEmpty()
+            token = token
         )
     }
 
     fun save(context: Context, settings: SheetsSyncSettings) {
+        val encryptedToken = SecureTokenStore.encrypt(settings.token.trim())
         context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(ENDPOINT_KEY, settings.endpoint.trim())
-            .putString(TOKEN_KEY, settings.token.trim())
+            .putString(ENCRYPTED_TOKEN_KEY, encryptedToken)
+            .remove(LEGACY_TOKEN_KEY)
             .apply()
     }
 }
