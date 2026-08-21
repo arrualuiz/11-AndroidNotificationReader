@@ -629,15 +629,15 @@ private fun NotificationArchiveScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 HeaderToggle(
-                    label = "Modo escuro",
-                    checked = darkModeEnabled,
-                    onCheckedChange = onDarkModeChange
-                )
-                Spacer(modifier = Modifier.size(16.dp))
-                HeaderToggle(
                     label = "Permitir giro",
                     checked = rotationEnabled,
                     onCheckedChange = onRotationChange
+                )
+                Spacer(modifier = Modifier.size(16.dp))
+                HeaderToggle(
+                    label = "Modo escuro",
+                    checked = darkModeEnabled,
+                    onCheckedChange = onDarkModeChange
                 )
             }
 
