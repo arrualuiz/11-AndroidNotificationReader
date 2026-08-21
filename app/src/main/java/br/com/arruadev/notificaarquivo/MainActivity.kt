@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -43,6 +44,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -69,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -105,6 +108,8 @@ class MainActivity : ComponentActivity() {
     private var syncMetadata by mutableStateOf(SheetsSyncMetadata())
     private var syncStatus by mutableStateOf<SyncStatus>(SyncStatus.Idle)
     private var historySyncStatus by mutableStateOf<HistorySyncStatus>(HistorySyncStatus.Idle)
+    private var darkModeEnabled by mutableStateOf(false)
+    private var rotationEnabled by mutableStateOf(false)
     private var receiverRegistered = false
 
     private val changesReceiver = object : BroadcastReceiver() {
@@ -115,6 +120,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val uiPreferences = getSharedPreferences(UI_PREFERENCES, MODE_PRIVATE)
+        darkModeEnabled = uiPreferences.getBoolean(DARK_MODE_KEY, false)
+        rotationEnabled = uiPreferences.getBoolean(ROTATION_ENABLED_KEY, false)
+        if (rotationEnabled) applyOrientation(true)
+        updateSystemBars(darkModeEnabled)
         syncSettings = SheetsSyncSettingsStore.read(this)
         syncMetadata = SheetsSyncMetadataStore.read(this)
         SyncScheduler.schedulePeriodic(this)
@@ -127,8 +137,10 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            NotificaArquivoTheme {
+            NotificaArquivoTheme(darkTheme = darkModeEnabled) {
                 NotificationArchiveScreen(
+                    darkModeEnabled = darkModeEnabled,
+                    rotationEnabled = rotationEnabled,
                     accessGranted = accessGranted,
                     notifications = notifications,
                     ignoredApps = ignoredApps,
@@ -163,7 +175,9 @@ class MainActivity : ComponentActivity() {
                         NotificationCommands.reconcile(this)
                     },
                     onSaveSyncSettings = ::saveSyncSettings,
-                    onSync = ::syncWithSheets
+                    onSync = ::syncWithSheets,
+                    onDarkModeChange = ::setDarkMode,
+                    onRotationChange = ::changeRotationSetting
                 )
             }
         }
@@ -171,6 +185,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        updateSystemBars(darkModeEnabled)
         if (!receiverRegistered) {
             ContextCompat.registerReceiver(
                 this,
@@ -184,6 +199,45 @@ class MainActivity : ComponentActivity() {
                 ContextCompat.RECEIVER_NOT_EXPORTED
             )
             receiverRegistered = true
+        }
+    }
+
+    private fun setDarkMode(enabled: Boolean) {
+        if (darkModeEnabled == enabled) return
+        getSharedPreferences(UI_PREFERENCES, MODE_PRIVATE)
+            .edit()
+            .putBoolean(DARK_MODE_KEY, enabled)
+            .apply()
+        updateSystemBars(enabled)
+        recreate()
+    }
+
+    private fun changeRotationSetting(enabled: Boolean) {
+        if (rotationEnabled == enabled) return
+        rotationEnabled = enabled
+        getSharedPreferences(UI_PREFERENCES, MODE_PRIVATE)
+            .edit()
+            .putBoolean(ROTATION_ENABLED_KEY, enabled)
+            .apply()
+        applyOrientation(enabled)
+    }
+
+    private fun applyOrientation(enabled: Boolean) {
+        requestedOrientation = if (enabled) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun updateSystemBars(darkMode: Boolean) {
+        val background = if (darkMode) 0xFF101412.toInt() else 0xFFF7F8F6.toInt()
+        window.statusBarColor = background
+        window.navigationBarColor = 0xFF101412.toInt()
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = !darkMode
+            isAppearanceLightNavigationBars = false
         }
     }
 
@@ -463,6 +517,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun NotificationArchiveScreen(
+    darkModeEnabled: Boolean,
+    rotationEnabled: Boolean,
     accessGranted: Boolean,
     notifications: List<CapturedNotification>,
     ignoredApps: List<IgnoredApp>,
@@ -488,7 +544,9 @@ private fun NotificationArchiveScreen(
     onAllowApp: (String) -> Unit,
     onShowNotification: (String) -> Unit,
     onSaveSyncSettings: (SheetsSyncSettings) -> Unit,
-    onSync: () -> Unit
+    onSync: () -> Unit,
+    onDarkModeChange: (Boolean) -> Unit,
+    onRotationChange: (Boolean) -> Unit
 ) {
     var showCaptureSettings by remember { mutableStateOf(false) }
     var showFiltersDialog by remember { mutableStateOf(false) }
@@ -565,6 +623,23 @@ private fun NotificationArchiveScreen(
                 text = "Seu arquivo local de notificacoes",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                HeaderToggle(
+                    label = "Modo escuro",
+                    checked = darkModeEnabled,
+                    onCheckedChange = onDarkModeChange
+                )
+                Spacer(modifier = Modifier.size(16.dp))
+                HeaderToggle(
+                    label = "Permitir giro",
+                    checked = rotationEnabled,
+                    onCheckedChange = onRotationChange
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
             AccessPanel(
@@ -695,6 +770,22 @@ private fun NotificationArchiveScreen(
 }
 
 @Composable
+private fun HeaderToggle(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = label,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp
+        )
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
 private fun UnseenBadge(count: Int, onClick: () -> Unit) {
     Box(
         modifier = Modifier
@@ -728,8 +819,16 @@ private fun AccessPanel(
     onConfigure: () -> Unit
 ) {
     val active = accessGranted && captureHealth.listenerConnected
-    val container = if (active) Color(0xFFDCEFE8) else Color(0xFFFFE8D6)
-    val content = if (active) Color(0xFF16483E) else Color(0xFF6E3515)
+    val container = if (active) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.tertiaryContainer
+    }
+    val content = if (active) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onTertiaryContainer
+    }
 
     Surface(
         shape = RoundedCornerShape(8.dp),
@@ -769,7 +868,7 @@ private fun AccessPanel(
                 )
             }
             TextButton(onClick = onConfigure) {
-                Text("Configurar")
+                Text("Configurar", color = content)
             }
         }
     }
@@ -979,16 +1078,19 @@ private fun SheetsPanel(
     val configured = settings.isConfigured()
     Card(
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFECE8F3)),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+        ),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Google Sheets", fontWeight = FontWeight.Bold, color = Color(0xFF403652))
+                    Text("Google Sheets", fontWeight = FontWeight.Bold)
                     Text(
                         text = syncStatusText(status, configured, pendingCount, metadata),
-                        color = Color(0xFF574D68),
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
                         fontSize = 13.sp
                     )
                 }
@@ -1366,24 +1468,50 @@ private fun formatOptionalTimestamp(timestamp: Long): String =
 
 private val LightColors = lightColorScheme(
     primary = Color(0xFF146C60),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFDCEFE8),
+    onPrimaryContainer = Color(0xFF16483E),
     secondary = Color(0xFF7A5534),
+    secondaryContainer = Color(0xFFECE8F3),
+    onSecondaryContainer = Color(0xFF403652),
     tertiary = Color(0xFF8B3A3A),
+    tertiaryContainer = Color(0xFFFFE8D6),
+    onTertiaryContainer = Color(0xFF6E3515),
     background = Color(0xFFF7F8F6),
+    onBackground = Color(0xFF1D211F),
     surface = Color(0xFFF7F8F6),
-    surfaceVariant = Color(0xFFE8ECE9)
+    onSurface = Color(0xFF1D211F),
+    surfaceVariant = Color(0xFFE8ECE9),
+    onSurfaceVariant = Color(0xFF4A514D)
 )
 
 private val DarkColors = darkColorScheme(
     primary = Color(0xFF7FD5C4),
+    onPrimary = Color(0xFF00382F),
+    primaryContainer = Color(0xFF16483E),
+    onPrimaryContainer = Color(0xFFB4F1E3),
     secondary = Color(0xFFE9BE94),
+    secondaryContainer = Color(0xFF4A405A),
+    onSecondaryContainer = Color(0xFFECE5F5),
     tertiary = Color(0xFFFFB3AE),
+    tertiaryContainer = Color(0xFF633B37),
+    onTertiaryContainer = Color(0xFFFFDAD7),
     background = Color(0xFF101412),
+    onBackground = Color(0xFFE0E4E1),
     surface = Color(0xFF101412),
-    surfaceVariant = Color(0xFF252B28)
+    onSurface = Color(0xFFE0E4E1),
+    surfaceVariant = Color(0xFF252B28),
+    onSurfaceVariant = Color(0xFFC1C9C4)
 )
 
 @Composable
-private fun NotificaArquivoTheme(content: @Composable () -> Unit) {
-    val isDark = androidx.compose.foundation.isSystemInDarkTheme()
-    MaterialTheme(colorScheme = if (isDark) DarkColors else LightColors, content = content)
+private fun NotificaArquivoTheme(
+    darkTheme: Boolean,
+    content: @Composable () -> Unit
+) {
+    MaterialTheme(colorScheme = if (darkTheme) DarkColors else LightColors, content = content)
 }
+
+private const val UI_PREFERENCES = "ui_preferences"
+private const val DARK_MODE_KEY = "dark_mode"
+private const val ROTATION_ENABLED_KEY = "rotation_enabled"
