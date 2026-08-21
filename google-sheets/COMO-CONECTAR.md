@@ -4,9 +4,11 @@
 
 - `Notificacoes`: dados brutos enviados pelo Android. Nao edite os IDs.
 - `Categorias`: regras editaveis por pacote Android.
-- `Financeiro`: copia automatica de Santander, C6 Bank, Inter, Caixa, Nubank, Neon e Riachuelo.
+- `Financeiro`: eventos financeiros relevantes; propagandas de bancos e lojas ficam de fora.
+- `Lancamentos`: compras, Pix, pagamentos e saques transformados em dados estruturados.
 - `Aplicativos`: resumo reconstruido pelo Apps Script depois de cada envio.
-- `Dashboard`: indicadores e graficos.
+- `Dashboard`: indicadores gerais e grafico de categorias.
+- `Dashboard financeiro`: gastos por periodo, grupo, estabelecimento, horario e instituicao.
 - `Ajuda`: lembrete do fluxo e dos campos.
 - `Backup dados`: copia bruta criada antes de uma recuperacao de colunas.
 
@@ -16,6 +18,7 @@ As tabelas visuais sao padronizadas em verde e recebem estes nomes:
 - `Categorias`: `CatalogoCategorias`.
 - `Aplicativos`: `ResumoAplicativos`.
 - `Financeiro`: `NotificacoesFinanceiras`.
+- `Lancamentos`: `LancamentosFinanceiros`.
 
 O `Code.gs` nao contem token, ID de planilha, ID de pasta ou nomes de abas. Toda a
 configuracao fica em **Configuracoes do projeto > Propriedades do script** no Apps Script.
@@ -33,7 +36,9 @@ Cadastre estas propriedades exatamente como abaixo:
 | `SHEET_CATEGORIES` | `Categorias` |
 | `SHEET_APPLICATIONS` | `Aplicativos` |
 | `SHEET_FINANCIAL` | `Financeiro` |
+| `SHEET_TRANSACTIONS` | `Lancamentos` |
 | `SHEET_DASHBOARD` | `Dashboard` |
+| `SHEET_FINANCIAL_DASHBOARD` | `Dashboard financeiro` |
 | `SHEET_HELP` | `Ajuda` |
 | `SHEET_BACKUP` | `Backup dados` |
 
@@ -86,11 +91,31 @@ Ao substituir o `Code.gs` por uma versao mais nova, abra **Implantar > Gerenciar
 implantacoes**, edite a implantacao, escolha **Nova versao** e confirme. Apenas salvar
 o codigo nao atualiza a URL `/exec` que o Android esta usando.
 
-Na versao 0.6.2 do script, execute tambem `configurarAtualizacaoAutomatica` uma vez pelo editor.
-Ela cria um acionador que atualiza `Categorias`, `Financeiro`, `Aplicativos` e `Dashboard`
-a cada 15 minutos. Essa tarefa
-fica separada do recebimento bruto: mesmo que o resumo tenha algum problema, a aba
-`Notificacoes` confirma o lote ao Android.
+Na versao 0.7.0 do script, execute tambem `configurarAtualizacaoAutomatica` uma vez pelo editor.
+Ela substitui os acionadores anteriores por dois novos: uma verificacao completa a cada
+5 minutos e uma atualizacao do `Dashboard financeiro` quando as datas de inicio ou fim
+sao editadas. Cada lote recebido tambem atualiza os resumos imediatamente. Se um painel
+falhar, a notificacao bruta continua confirmada ao Android e o erro recebe um relatorio.
+
+O processamento e retroativo. `prepararPlanilha` e `atualizarResumos` releem toda a aba
+`Notificacoes`, retiram propagandas da aba `Financeiro`, reconstroem `Lancamentos` e
+refazem os dois dashboards. Nenhuma linha bruta e apagada.
+
+## Analise financeira
+
+`Financeiro` conserva a notificacao original de compras aprovadas, Pix, transferencias,
+pagamentos, boletos, faturas e saques. Uma notificacao da Riachuelo so entra nessa aba
+quando falar de uma operacao financeira; colecoes, cupons e descontos sao classificados
+como `Promocoes`.
+
+`Lancamentos` inclui apenas movimentacoes que tenham valor reconhecido e indiquem uma
+entrada ou saida efetiva. Boleto apenas disponivel e aviso de fatura nao sao somados como
+gasto, pois ainda nao comprovam pagamento. O parser reconhece os formatos atuais de
+Nubank, C6 Bank, Neon e Santander e pode ser ampliado quando surgir um texto novo.
+
+No `Dashboard financeiro`, edite as celulas amarelas `Inicio` e `Fim`. O acionador refaz
+o painel com o periodo escolhido. Os valores de Shopee, iFood, Uber e comida na rua sao
+separados, assim como cartao virtual, horario, instituicao e estabelecimento.
 
 Ao atualizar de uma versao anterior, execute `prepararPlanilha` novamente. Ela cria a
 aba `Financeiro`, preenche o catalogo de `Categorias`, categoriza os registros antigos
@@ -124,7 +149,7 @@ OAuth nesta primeira versao. O script rejeita requisicoes cujo token nao confere
 
 ## Configurar o Android
 
-1. Instale a versao 0.7.0 do Notifica Arquivo.
+1. Instale a versao 0.8.0 do Notifica Arquivo.
 2. Abra o painel **Google Sheets** e toque em **Configurar**.
 3. Cole a URL `/exec` da implantacao.
 4. Informe exatamente o valor da Script Property `SYNC_TOKEN`.

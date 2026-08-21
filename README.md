@@ -14,11 +14,17 @@ e sincroniza-las com um Google Sheets.
   segundo plano com WorkManager.
 - Atualiza o historico ao vivo, conta itens ainda nao vistos, mostra o check de envio
   ao Sheets e permite ocultar, excluir ou ignorar um aplicativo.
-- Organiza o Apps Script e as abas Notificacoes, Financeiro, Categorias, Aplicativos,
-  Dashboard, Ajuda e Backup dados, com recuperacao de esquema e remocao de duplicatas.
+- Organiza o Apps Script e as abas Notificacoes, Financeiro, Lancamentos, Categorias,
+  Aplicativos, Dashboard, Dashboard financeiro, Ajuda e Backup dados, com recuperacao
+  de esquema e remocao de duplicatas.
 - Armazena configuracoes sensiveis nas Script Properties e cria relatorios diarios no
   Drive somente quando uma execucao falha.
 - Adiciona um icone adaptativo proprio ao aplicativo.
+- Atualiza os dashboards a cada recebimento e reprocessa todo o historico a cada cinco
+  minutos, separando propagandas de movimentacoes financeiras.
+- Gera as abas `Lancamentos` e `Dashboard financeiro`, com filtro de periodo, valores
+  por estabelecimento e horario, cartao virtual e totais de Shopee, iFood, Uber e
+  comida na rua.
 
 Funcionalidades principais:
 
@@ -145,6 +151,12 @@ O token, o ID da planilha, a pasta de debug e os nomes das abas ficam nas Script
 Properties do Apps Script. Nenhum desses valores precisa ser gravado no codigo.
 Erros do Apps Script sao salvos apenas quando acontecem, em uma subpasta diaria de
 `NotificaArquivo-Debug` no Google Drive, sem copiar token ou conteudo de notificacoes.
+
+O Apps Script 0.7.0 cria um grafico de categorias no dashboard geral e transforma
+mensagens de compras, Pix e pagamentos em lancamentos analisaveis. A aba `Financeiro`
+mantem os eventos relevantes; a aba `Lancamentos` contem somente movimentacoes com
+valor reconhecido. Ofertas da Riachuelo ou de bancos permanecem no historico, mas nao
+sao contabilizadas como gasto.
 
 ## Onde comecar a ler o codigo
 
