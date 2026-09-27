@@ -3,6 +3,58 @@
 Aplicativo Android em Kotlin e Jetpack Compose para arquivar notificacoes localmente
 e sincroniza-las com um Google Sheets.
 
+## Novidades do Apps Script 0.7.1 (depois da v0.8.0)
+
+O aplicativo Android continua na 0.8.0; as mudancas abaixo estao todas em
+`google-sheets/Code.gs` (que passou de `API_VERSION = '0.7.0'` para `'0.7.1'`) e na
+documentacao.
+
+**Catalogo de cartoes de credito**
+
+- Nova aba `Cartoes de credito` (tabela `CatalogoCartoes`), montada a partir do
+  historico: instituicao, quatro ultimos digitos, primeira e ultima notificacao,
+  quantidade de compras aprovadas e total observado.
+- Colunas editaveis e preservadas a cada reconstrucao: `Tipo` (`Nao informado`,
+  `Virtual` ou `Fisico`), `Apelido`, `Titular` e `Uso principal` (`Geral`, `Assinaturas`,
+  `Comida na rua`, `Compras` ou `Outro`). Cartoes com tipo `Nao informado` ficam
+  marcados em `Revisar?`.
+- `Lancamentos` passa a usar o catalogo: o tipo escolhido corrige `Cartao virtual?` e o
+  uso principal classifica compras cujo estabelecimento ainda nao e reconhecido.
+- Nova Script Property opcional `SHEET_CREDIT_CARDS` para o nome da aba.
+
+**Lancamentos e categorias mais corretos**
+
+- Compras recusadas ou nao aprovadas continuam como aviso financeiro, mas nunca viram
+  lancamento.
+- Confirmacoes de pagamento ou de pedido pago da Shopee, Mercado Livre, Amazon e Shein
+  ficam em `Compras`, sem duplicar a cobranca que o banco ja notifica.
+- Nova categoria `Seguranca`: mensagens cujo texto parece um token, chave ou senha sao
+  classificadas assim e marcadas como sensiveis. Itens `Financeiro` e `Seguranca` sao
+  sempre sensiveis. Qualquer token exposto deve ser trocado mesmo assim.
+- Novas regras automaticas: Serasa em `Promocoes`, Pierre em `Financas pessoais`,
+  Instagram em `Social`, Shein em `Compras` e o aviso de mapas off-line do Google Maps
+  em `Sistema`. Linhas antes classificadas como `Outros` sao recalculadas.
+- `Assinaturas` reconhece tambem Google One, Google Drive, iCloud, CapCut, ChatGPT/OpenAI
+  e Dropbox.
+- Valores aceitos em mais formatos: `R$ 1.234,56`, `R$ 1,234.56` e `R$ 50`.
+- O final do cartao e lido mesmo com mascara (`final **** 1234`, `final •• 1234`).
+
+**Relatorios de erro**
+
+- Se a pasta de debug configurada estiver indisponivel, o relatorio e salvo em
+  `Meu Drive/NotificaArquivo-Debug` e registra isso no proprio relatorio, em vez de a
+  gravacao do erro falhar tambem.
+
+### Como conferir se o Apps Script publicado esta nesta versao
+
+1. Abra no navegador a URL `/exec` do aplicativo da web (a mesma configurada no Android).
+2. A resposta mostra `apiVersion`. Se for `0.7.1`, o script publicado esta sincronizado
+   com este repositorio.
+3. Se ainda for `0.7.0`: cole o `google-sheets/Code.gs` no editor do Apps Script, salve,
+   abra **Implantar > Gerenciar implantacoes**, edite a implantacao e escolha **Nova
+   versao** (a URL continua a mesma). Depois execute `prepararPlanilha` uma vez para criar
+   a aba `Cartoes de credito`.
+
 ## Versao 0.8.0
 
 - Recupera automaticamente o listener de notificacoes quando a MIUI o desconecta.
@@ -81,7 +133,7 @@ para sincronizar o Gradle, instalar SDKs, depurar e gerar o APK.
 
 1. Abra o Android Studio.
 2. Escolha **Open**.
-3. Selecione `C:\DEV\Android\NotificaArquivo`.
+3. Selecione `C:\DEV\01-Android\NotificaArquivo`.
 4. Aguarde o Gradle terminar de baixar e sincronizar as dependencias.
 5. Se o Android Studio oferecer instalar o Android SDK 36, aceite.
 
@@ -152,7 +204,7 @@ Properties do Apps Script. Nenhum desses valores precisa ser gravado no codigo.
 Erros do Apps Script sao salvos apenas quando acontecem, em uma subpasta diaria de
 `NotificaArquivo-Debug` no Google Drive, sem copiar token ou conteudo de notificacoes.
 
-O Apps Script 0.7.0 cria um grafico de categorias no dashboard geral e transforma
+Desde a 0.7.0, o Apps Script cria um grafico de categorias no dashboard geral e transforma
 mensagens de compras, Pix e pagamentos em lancamentos analisaveis. A aba `Financeiro`
 mantem os eventos relevantes; a aba `Lancamentos` contem somente movimentacoes com
 valor reconhecido. Ofertas da Riachuelo ou de bancos permanecem no historico, mas nao

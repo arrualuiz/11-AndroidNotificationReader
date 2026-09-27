@@ -9,13 +9,14 @@ const PROPERTY_KEYS = Object.freeze({
   applicationsSheet: 'SHEET_APPLICATIONS',
   financialSheet: 'SHEET_FINANCIAL',
   transactionsSheet: 'SHEET_TRANSACTIONS',
+  creditCardsSheet: 'SHEET_CREDIT_CARDS',
   dashboardSheet: 'SHEET_DASHBOARD',
   financialDashboardSheet: 'SHEET_FINANCIAL_DASHBOARD',
   helpSheet: 'SHEET_HELP',
   backupSheet: 'SHEET_BACKUP',
 });
 
-const API_VERSION = '0.7.0';
+const API_VERSION = '0.7.1';
 
 const TABLE_NAMES = Object.freeze({
   notifications: 'TodasNotificacoes',
@@ -23,6 +24,7 @@ const TABLE_NAMES = Object.freeze({
   applications: 'ResumoAplicativos',
   financial: 'NotificacoesFinanceiras',
   transactions: 'LancamentosFinanceiros',
+  creditCards: 'CatalogoCartoes',
 });
 
 const GREEN_TABLE_COLORS = Object.freeze({
@@ -125,6 +127,32 @@ const TRANSACTION_COLUMNS = Object.freeze({
   text: 13,
   packageName: 14,
 });
+const CREDIT_CARD_HEADERS = [
+  'Instituicao',
+  'Final',
+  'Tipo',
+  'Apelido',
+  'Titular',
+  'Uso principal',
+  'Primeira notificacao',
+  'Ultima notificacao',
+  'Compras aprovadas',
+  'Total observado',
+  'Revisar?',
+];
+const CREDIT_CARD_COLUMNS = Object.freeze({
+  institution: 0,
+  cardFinal: 1,
+  type: 2,
+  nickname: 3,
+  holder: 4,
+  primaryUse: 5,
+  firstSeen: 6,
+  lastSeen: 7,
+  approvedPurchases: 8,
+  observedTotal: 9,
+  review: 10,
+});
 const APPLICATION_HEADERS = [
   'Pacote',
   'Aplicativo',
@@ -151,12 +179,14 @@ function prepararPlanilha() {
     ['preparar-Aplicativos', () => ensureSheet_(spreadsheet, config.sheets.applications, APPLICATION_HEADERS)],
     ['preparar-Financeiro', () => ensureNotificationSheet_(spreadsheet, config.sheets.financial)],
     ['preparar-Lancamentos', () => ensureSheet_(spreadsheet, config.sheets.transactions, TRANSACTION_HEADERS)],
+    ['preparar-Cartoes', () => ensureSheet_(spreadsheet, config.sheets.creditCards, CREDIT_CARD_HEADERS)],
     ['preparar-Dashboard', () => ensurePlainSheet_(spreadsheet, config.sheets.dashboard)],
     ['preparar-Dashboard-financeiro', () => ensurePlainSheet_(spreadsheet, config.sheets.financialDashboard)],
     ['preparar-Ajuda', () => ensurePlainSheet_(spreadsheet, config.sheets.help)],
     ['catalogar-categorias', () => syncCategoryCatalog_(spreadsheet, config)],
     ['categorizar-historico', () => updateNotificationCategories_(spreadsheet, config)],
     ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet, config)],
+    ['reconstruir-Cartoes', () => rebuildCreditCards_(spreadsheet, config)],
     ['reconstruir-Lancamentos', () => rebuildTransactions_(spreadsheet, config)],
     ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet, config)],
     ['reconstruir-Dashboard', () => rebuildDashboard_(spreadsheet, config)],
@@ -206,6 +236,7 @@ function atualizarResumos() {
     ['catalogar-categorias', () => syncCategoryCatalog_(spreadsheet, config)],
     ['categorizar-historico', () => updateNotificationCategories_(spreadsheet, config)],
     ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet, config)],
+    ['reconstruir-Cartoes', () => rebuildCreditCards_(spreadsheet, config)],
     ['reconstruir-Lancamentos', () => rebuildTransactions_(spreadsheet, config)],
     ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet, config)],
     ['reconstruir-Dashboard', () => rebuildDashboard_(spreadsheet, config)],
@@ -247,6 +278,7 @@ function recuperarDadosMisturados() {
       ['catalogar-categorias', () => syncCategoryCatalog_(spreadsheet, config)],
       ['categorizar-historico', () => updateNotificationCategories_(spreadsheet, config)],
       ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet, config)],
+      ['reconstruir-Cartoes', () => rebuildCreditCards_(spreadsheet, config)],
       ['reconstruir-Lancamentos', () => rebuildTransactions_(spreadsheet, config)],
       ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet, config)],
       ['reconstruir-Dashboard', () => rebuildDashboard_(spreadsheet, config)],
@@ -350,7 +382,7 @@ function doPost(event) {
         appName,
         id,
         new Date(),
-        rule ? rule.sensitive : resolvedCategory === 'Financeiro',
+        Boolean(rule?.sensitive) || ['Financeiro', 'Seguranca'].includes(resolvedCategory),
         packageName,
         clean_(item.sourceKey, 500),
         clean_(payload.deviceId, 300),
@@ -364,6 +396,7 @@ function doPost(event) {
         ['catalogar-categorias', () => syncCategoryCatalog_(spreadsheet, config)],
         ['categorizar-historico', () => updateNotificationCategories_(spreadsheet, config)],
         ['reconstruir-Financeiro', () => rebuildFinancial_(spreadsheet, config)],
+        ['reconstruir-Cartoes', () => rebuildCreditCards_(spreadsheet, config)],
         ['reconstruir-Lancamentos', () => rebuildTransactions_(spreadsheet, config)],
         ['reconstruir-Aplicativos', () => rebuildApplications_(spreadsheet, config)],
         ['reconstruir-Dashboard', () => rebuildDashboard_(spreadsheet, config)],
@@ -487,18 +520,17 @@ function updateNotificationCategories_(spreadsheet, config) {
     const packageName = String(row[NOTIFICATION_COLUMNS.packageName] || '').trim();
     const appName = String(row[NOTIFICATION_COLUMNS.appName] || packageName).trim();
     const rule = rules.get(packageName);
-    const current = String(row[NOTIFICATION_COLUMNS.category] || '').trim();
     const category = resolveNotificationCategory_(
-      rule?.category || current,
+      rule?.category || '',
       packageName,
       appName,
       row[NOTIFICATION_COLUMNS.title],
       row[NOTIFICATION_COLUMNS.text]
     );
     categories.push([category]);
-    sensitiveValues.push([
-      rule ? rule.sensitive : row[NOTIFICATION_COLUMNS.sensitive] === true || category === 'Financeiro',
-    ]);
+    sensitiveValues.push([Boolean(rule?.sensitive) ||
+      booleanValue_(row[NOTIFICATION_COLUMNS.sensitive]) ||
+      ['Financeiro', 'Seguranca'].includes(category)]);
   });
 
   sheet.getRange(2, NOTIFICATION_COLUMNS.category + 1, rowCount, 1).setValues(categories);
@@ -519,6 +551,12 @@ function rebuildFinancial_(spreadsheet, config) {
 }
 
 function isFinancialEventRow_(row) {
+  if (isCommerceOrderStatus_(
+    row[NOTIFICATION_COLUMNS.packageName],
+    row[NOTIFICATION_COLUMNS.appName],
+    row[NOTIFICATION_COLUMNS.title],
+    row[NOTIFICATION_COLUMNS.text]
+  )) return false;
   return isFinancialEventContent_(
     row[NOTIFICATION_COLUMNS.title],
     row[NOTIFICATION_COLUMNS.text]
@@ -526,12 +564,28 @@ function isFinancialEventRow_(row) {
 }
 
 function resolveNotificationCategory_(configuredCategory, packageName, appName, title, text) {
+  if (looksLikeSecret_(text)) return 'Seguranca';
+  if (isCommerceOrderStatus_(packageName, appName, title, text)) return 'Compras';
   if (isFinancialEventContent_(title, text)) return 'Financeiro';
   const automatic = automaticCategory_(packageName, appName, title, text);
   const configured = String(configuredCategory || '').trim();
-  if (configured && configured !== 'Sem categoria' && configured !== 'Financeiro') return configured;
+  if (configured && !['Sem categoria', 'Financeiro', 'Outros'].includes(configured)) return configured;
+  if (configured === 'Outros' && automatic !== 'Outros') return automatic;
   if (configured === 'Financeiro' && automatic !== 'Promocoes') return 'Financeiro';
   return automatic;
+}
+
+function isCommerceOrderStatus_(packageName, appName, title, text) {
+  const app = normalize_([packageName, appName].join(' '));
+  const content = normalize_([title, text].join(' '));
+  const commerceApp = containsAny_(app, ['shopee', 'mercadolibre', 'mercado livre', 'amazon', 'shein', 'com.zzkko']);
+  return commerceApp && /pagamento (?:confirmado|aprovado)|pedido .*pago/.test(content);
+}
+
+function looksLikeSecret_(value) {
+  const text = String(value || '').trim();
+  return /^[a-zA-Z0-9_-]{28,}$/.test(text) ||
+    /(?:token|chave|secret|senha)\s*[:=]\s*[a-zA-Z0-9_-]{16,}/i.test(text);
 }
 
 function isFinancialEventContent_(title, text) {
@@ -561,16 +615,26 @@ function isKnownFinancialApp_(packageName, appName) {
 
 function automaticCategory_(packageName, appName, title, text) {
   const source = normalize_([packageName, appName, title, text].join(' '));
+  if (looksLikeSecret_(text)) return 'Seguranca';
+  if (isCommerceOrderStatus_(packageName, appName, title, text)) return 'Compras';
   if (isFinancialEventContent_(title, text)) return 'Financeiro';
   if (isKnownFinancialApp_(packageName, appName)) return 'Promocoes';
+  if (containsAny_(source, ['br.com.serasaexperian.consumidor', ' serasa '])) return 'Promocoes';
+  if (containsAny_(source, ['io.cloudwalk.pierre', ' pierre '])) return 'Financas pessoais';
   if (containsAny_(source, ['whatsapp', 'telegram', 'messenger', 'com.google.android.apps.messaging'])) {
     return 'Mensagens';
   }
+  if (containsAny_(source, ['instagram', 'com.instagram.android'])) return 'Social';
   if (containsAny_(source, ['ifood', 'rappi', 'uber eats', '99food'])) return 'Entregas';
   if (containsAny_(source, ['duolingo', 'coursera', 'udemy'])) return 'Educacao';
-  if (containsAny_(source, ['mercadolibre', 'mercado livre', 'shopee', 'amazon'])) return 'Compras';
+  if (containsAny_(source, ['mercadolibre', 'mercado livre', 'shopee', 'amazon', 'shein', 'com.zzkko'])) {
+    return 'Compras';
+  }
   if (containsAny_(source, ['codigo de verificacao', 'codigo de seguranca', 'autenticacao'])) {
     return 'Seguranca';
+  }
+  if (containsAny_(source, ['com.google.android.apps.maps', 'maps']) && source.includes('mapas off-line')) {
+    return 'Sistema';
   }
   if (
     source.startsWith('android ') ||
@@ -603,9 +667,128 @@ function readExistingIds_(sheet) {
   );
 }
 
+function rebuildCreditCards_(spreadsheet, config) {
+  const source = spreadsheet.getSheetByName(config.sheets.notifications);
+  const target = ensureSheet_(spreadsheet, config.sheets.creditCards, CREDIT_CARD_HEADERS);
+  const existing = new Map();
+  if (target.getLastRow() >= 2) {
+    target.getRange(2, 1, target.getLastRow() - 1, CREDIT_CARD_HEADERS.length).getValues().forEach((row) => {
+      const key = creditCardKey_(row[CREDIT_CARD_COLUMNS.institution], row[CREDIT_CARD_COLUMNS.cardFinal]);
+      if (key) existing.set(key, row);
+    });
+  }
+
+  const cards = new Map();
+  if (source && source.getLastRow() >= 2) {
+    source.getRange(2, 1, source.getLastRow() - 1, NOTIFICATION_HEADERS.length).getValues().forEach((row) => {
+      const title = row[NOTIFICATION_COLUMNS.title];
+      const text = row[NOTIFICATION_COLUMNS.text];
+      const cardFinal = extractCardFinal_([title, text].join(' '));
+      if (!cardFinal) return;
+      const institution = String(row[NOTIFICATION_COLUMNS.appName] || 'Desconhecido').trim();
+      const key = creditCardKey_(institution, cardFinal);
+      const seenAt = dateValue_(row[NOTIFICATION_COLUMNS.postedAt]);
+      const current = cards.get(key) || {
+        institution,
+        cardFinal,
+        firstSeen: seenAt,
+        lastSeen: seenAt,
+        approvedPurchases: 0,
+        observedTotal: 0,
+        groups: new Map(),
+      };
+      if (seenAt && (!current.firstSeen || seenAt < current.firstSeen)) current.firstSeen = seenAt;
+      if (seenAt && (!current.lastSeen || seenAt > current.lastSeen)) current.lastSeen = seenAt;
+
+      const transaction = parseFinancialTransaction_(row, config.debugTimeZone);
+      if (transaction && transaction[TRANSACTION_COLUMNS.type] === 'Compra') {
+        current.approvedPurchases += 1;
+        current.observedTotal += Number(transaction[TRANSACTION_COLUMNS.amount]) || 0;
+        const group = transaction[TRANSACTION_COLUMNS.group];
+        current.groups.set(group, (current.groups.get(group) || 0) + 1);
+      }
+      cards.set(key, current);
+    });
+  }
+
+  existing.forEach((row, key) => {
+    if (!cards.has(key)) {
+      cards.set(key, {
+        institution: row[CREDIT_CARD_COLUMNS.institution],
+        cardFinal: row[CREDIT_CARD_COLUMNS.cardFinal],
+        firstSeen: row[CREDIT_CARD_COLUMNS.firstSeen],
+        lastSeen: row[CREDIT_CARD_COLUMNS.lastSeen],
+        approvedPurchases: Number(row[CREDIT_CARD_COLUMNS.approvedPurchases]) || 0,
+        observedTotal: Number(row[CREDIT_CARD_COLUMNS.observedTotal]) || 0,
+        groups: new Map(),
+      });
+    }
+  });
+
+  const rows = Array.from(cards.entries())
+    .sort((left, right) => left[1].institution.localeCompare(right[1].institution) || left[1].cardFinal.localeCompare(right[1].cardFinal))
+    .map(([key, card]) => {
+      const previous = existing.get(key) || [];
+      const inferredUse = Array.from(card.groups.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Geral';
+      const type = String(previous[CREDIT_CARD_COLUMNS.type] || 'Nao informado').trim();
+      return [
+        card.institution,
+        card.cardFinal,
+        type,
+        previous[CREDIT_CARD_COLUMNS.nickname] || '',
+        previous[CREDIT_CARD_COLUMNS.holder] || '',
+        previous[CREDIT_CARD_COLUMNS.primaryUse] || inferredUse,
+        card.firstSeen || '',
+        card.lastSeen || '',
+        card.approvedPurchases,
+        card.observedTotal,
+        type === 'Nao informado',
+      ];
+    });
+
+  const newSheet = target.getLastRow() < 2;
+  replaceDataRows_(target, CREDIT_CARD_HEADERS.length, rows);
+  target.getRange('C1').setNote('Escolha Nao informado, Virtual ou Fisico. A escolha sera preservada.');
+  target.getRange('F1').setNote('Uso padrao aplicado quando o estabelecimento nao puder ser reconhecido.');
+  if (newSheet) {
+    const typeRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(['Nao informado', 'Virtual', 'Fisico'], true)
+      .setAllowInvalid(false)
+      .build();
+    const useRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(['Geral', 'Assinaturas', 'Comida na rua', 'Compras', 'Outro'], true)
+      .setAllowInvalid(true)
+      .build();
+    target.getRange(2, CREDIT_CARD_COLUMNS.type + 1, Math.max(rows.length, 100), 1).setDataValidation(typeRule);
+    target.getRange(2, CREDIT_CARD_COLUMNS.primaryUse + 1, Math.max(rows.length, 100), 1).setDataValidation(useRule);
+  }
+}
+
+function readCreditCardRules_(spreadsheet, config) {
+  const sheet = spreadsheet.getSheetByName(config.sheets.creditCards);
+  const rules = new Map();
+  if (!sheet || sheet.getLastRow() < 2) return rules;
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, CREDIT_CARD_HEADERS.length).getValues().forEach((row) => {
+    const key = creditCardKey_(row[CREDIT_CARD_COLUMNS.institution], row[CREDIT_CARD_COLUMNS.cardFinal]);
+    if (!key) return;
+    rules.set(key, {
+      type: String(row[CREDIT_CARD_COLUMNS.type] || 'Nao informado').trim(),
+      primaryUse: String(row[CREDIT_CARD_COLUMNS.primaryUse] || 'Geral').trim(),
+    });
+  });
+  return rules;
+}
+
+function creditCardKey_(institution, cardFinal) {
+  const finalDigits = String(cardFinal || '').replace(/\D/g, '').slice(-4);
+  if (!finalDigits) return '';
+  return `${normalize_(institution).trim()}|${finalDigits}`;
+}
+
 function rebuildTransactions_(spreadsheet, config) {
   const source = spreadsheet.getSheetByName(config.sheets.notifications);
   const target = ensureSheet_(spreadsheet, config.sheets.transactions, TRANSACTION_HEADERS);
+  const cardRules = readCreditCardRules_(spreadsheet, config);
   const transactions = [];
 
   if (source && source.getLastRow() >= 2) {
@@ -613,7 +796,7 @@ function rebuildTransactions_(spreadsheet, config) {
       .getRange(2, 1, source.getLastRow() - 1, NOTIFICATION_HEADERS.length)
       .getValues()
       .forEach((row) => {
-        const transaction = parseFinancialTransaction_(row, config.debugTimeZone);
+        const transaction = parseFinancialTransaction_(row, config.debugTimeZone, cardRules);
         if (transaction) transactions.push(transaction);
       });
   }
@@ -622,10 +805,11 @@ function rebuildTransactions_(spreadsheet, config) {
   replaceDataRows_(target, TRANSACTION_HEADERS.length, transactions);
 }
 
-function parseFinancialTransaction_(row, timeZone) {
+function parseFinancialTransaction_(row, timeZone, cardRules = new Map()) {
   const title = String(row[NOTIFICATION_COLUMNS.title] || '').trim();
   const text = String(row[NOTIFICATION_COLUMNS.text] || '').trim();
   const normalized = normalize_([title, text].join(' '));
+  if (/compra recusada|recusad|nao foi aprovada|nao aprovada/.test(normalized)) return null;
   const amount = extractMoney_(text) ?? extractMoney_(title);
   if (!amount || amount <= 0) return null;
 
@@ -660,6 +844,17 @@ function parseFinancialTransaction_(row, timeZone) {
 
   const merchant = extractMerchant_(text, type);
   const institution = String(row[NOTIFICATION_COLUMNS.appName] || 'Desconhecido').trim();
+  const cardFinal = extractCardFinal_(text);
+  const cardRule = cardRules.get(creditCardKey_(institution, cardFinal));
+  const detectedGroup = classifySpending_(merchant, title, text, type);
+  const group = cardRule?.primaryUse && !['Geral', 'Outro'].includes(cardRule.primaryUse) && detectedGroup === 'Outros'
+    ? cardRule.primaryUse
+    : detectedGroup;
+  const virtualCard = cardRule?.type === 'Virtual'
+    ? true
+    : cardRule?.type === 'Fisico'
+      ? false
+      : /cartao virtual/i.test(normalize_(text));
   return [
     dateTime,
     new Date(dateTime.getFullYear(), dateTime.getMonth(), dateTime.getDate()),
@@ -669,9 +864,9 @@ function parseFinancialTransaction_(row, timeZone) {
     direction,
     amount,
     merchant,
-    classifySpending_(merchant, title, text, type),
-    extractCardFinal_(text),
-    /cartao virtual/i.test(normalize_(text)),
+    group,
+    cardFinal,
+    virtualCard,
     String(row[NOTIFICATION_COLUMNS.id] || '').trim(),
     title,
     text,
@@ -680,15 +875,23 @@ function parseFinancialTransaction_(row, timeZone) {
 }
 
 function extractMoney_(value) {
-  const match = String(value || '').match(/R\$\s*([\d.]+,\d{2})/i);
+  const match = String(value || '').match(/R\$\s*([\d.]+,\d{2}|[\d,]+\.\d{2}|\d+)/i);
   if (!match) return null;
-  const amount = Number(match[1].replace(/\./g, '').replace(',', '.'));
+  const raw = match[1].replace(/[^\d.,]/g, '');
+  const decimalSeparator = raw.lastIndexOf(',') > raw.lastIndexOf('.') ? ',' : '.';
+  const normalizedAmount = decimalSeparator === ','
+    ? raw.replace(/\./g, '').replace(',', '.')
+    : raw.replace(/,/g, '');
+  const amount = Number(normalizedAmount);
   return Number.isFinite(amount) ? amount : null;
 }
 
 function extractCardFinal_(value) {
-  const match = String(value || '').match(/(?:cart[aã]o(?: virtual)?(?: com)? final|final)\s*(\d{4})/i);
-  return match ? match[1] : '';
+  const match = String(value || '').match(
+    /(?:cart[aã]o(?: virtual)?(?: com)? final|final)\s*([\d*xX• -]{4,30})/i
+  );
+  if (!match) return '';
+  return match[1].replace(/\D/g, '').slice(-4);
 }
 
 function extractTransactionDate_(value) {
@@ -722,7 +925,10 @@ function classifySpending_(merchant, title, text, type) {
     'coffee', 'bar ', 'padaria', 'panificadora', 'sorvete', 'acai', 'vending',
   ])) return 'Comida na rua';
   if (containsAny_(source, ['posto ', 'combustivel', 'shell', 'ipiranga', 'petrobras'])) return 'Combustivel';
-  if (containsAny_(source, ['spotify', 'apple.com/bill', 'netflix', 'amazon prime', 'youtube'])) {
+  if (containsAny_(source, [
+    'spotify', 'apple.com/bill', 'netflix', 'amazon prime', 'youtube', 'google one',
+    'google drive', 'icloud', 'capcut', 'chatgpt', 'openai', 'dropbox',
+  ])) {
     return 'Assinaturas';
   }
   if (type === 'Pix enviado') return 'Pix enviado';
@@ -1137,6 +1343,12 @@ function configureTables_(spreadsheet, config) {
       tableName: TABLE_NAMES.transactions,
       columnCount: TRANSACTION_HEADERS.length,
       widths: [155, 110, 75, 150, 130, 95, 110, 230, 145, 105, 115, 320, 220, 360, 230],
+    },
+    {
+      sheetName: config.sheets.creditCards,
+      tableName: TABLE_NAMES.creditCards,
+      columnCount: CREDIT_CARD_HEADERS.length,
+      widths: [165, 85, 125, 180, 150, 145, 160, 160, 135, 130, 95],
     },
   ];
 
@@ -1611,11 +1823,19 @@ function writeErrorReport_(operation, error, context = {}) {
     const debugFolderName = String(
       values[PROPERTY_KEYS.debugFolderName] || 'NotificaArquivo-Debug'
     ).trim();
-    const debugParentFolderId = folderIdFromValue_(values[PROPERTY_KEYS.debugParentFolderId]);
     const now = new Date();
     const day = Utilities.formatDate(now, debugTimeZone, 'yyyy-MM-dd');
     const time = Utilities.formatDate(now, debugTimeZone, 'HH-mm-ss');
-    const debugParent = DriveApp.getFolderById(debugParentFolderId);
+    let debugParent = DriveApp.getRootFolder();
+    let usedDriveRoot = true;
+    try {
+      const configuredParentId = folderIdFromValue_(values[PROPERTY_KEYS.debugParentFolderId]);
+      debugParent = DriveApp.getFolderById(configuredParentId);
+      debugParent.getName();
+      usedDriveRoot = false;
+    } catch (parentError) {
+      console.error(`Pasta de debug configurada indisponivel; usando Meu Drive: ${String(parentError.message || parentError)}`);
+    }
     const root = getOrCreateFolder_(debugParent, debugFolderName);
     const daily = getOrCreateFolder_(root, day);
     const safeOperation = String(operation || 'erro').replace(/[^a-zA-Z0-9_-]+/g, '-');
@@ -1625,6 +1845,10 @@ function writeErrorReport_(operation, error, context = {}) {
       timestamp: Utilities.formatDate(now, debugTimeZone, "yyyy-MM-dd'T'HH:mm:ssXXX"),
       apiVersion: API_VERSION,
       operation,
+      debugStorage: {
+        usedDriveRoot,
+        requestedParentId: safePropertyId_(values[PROPERTY_KEYS.debugParentFolderId]),
+      },
       spreadsheet: {
         id: safePropertyId_(values[PROPERTY_KEYS.spreadsheetId]),
         tabs: {
@@ -1633,6 +1857,7 @@ function writeErrorReport_(operation, error, context = {}) {
           applications: values[PROPERTY_KEYS.applicationsSheet] || '',
           financial: values[PROPERTY_KEYS.financialSheet] || '',
           transactions: values[PROPERTY_KEYS.transactionsSheet] || '',
+          creditCards: values[PROPERTY_KEYS.creditCardsSheet] || '',
           dashboard: values[PROPERTY_KEYS.dashboardSheet] || '',
           financialDashboard: values[PROPERTY_KEYS.financialDashboardSheet] || '',
           help: values[PROPERTY_KEYS.helpSheet] || '',
@@ -1648,7 +1873,7 @@ function writeErrorReport_(operation, error, context = {}) {
     };
     const file = daily.createFile(fileName, JSON.stringify(report, null, 2), MimeType.PLAIN_TEXT);
     return {
-      path: `${debugFolderName}/${day}/${fileName}`,
+      path: `${usedDriveRoot ? 'Meu Drive/' : ''}${debugFolderName}/${day}/${fileName}`,
       url: file.getUrl(),
     };
   } catch (debugError) {
@@ -1694,6 +1919,7 @@ function configuredProperties_() {
       applications: String(values[PROPERTY_KEYS.applicationsSheet]).trim(),
       financial: String(values[PROPERTY_KEYS.financialSheet]).trim(),
       transactions: String(values[PROPERTY_KEYS.transactionsSheet]).trim(),
+      creditCards: String(values[PROPERTY_KEYS.creditCardsSheet]).trim(),
       dashboard: String(values[PROPERTY_KEYS.dashboardSheet]).trim(),
       financialDashboard: String(values[PROPERTY_KEYS.financialDashboardSheet]).trim(),
       help: String(values[PROPERTY_KEYS.helpSheet]).trim(),

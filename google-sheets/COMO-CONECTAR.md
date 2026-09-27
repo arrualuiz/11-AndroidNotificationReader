@@ -6,6 +6,7 @@
 - `Categorias`: regras editaveis por pacote Android.
 - `Financeiro`: eventos financeiros relevantes; propagandas de bancos e lojas ficam de fora.
 - `Lancamentos`: compras, Pix, pagamentos e saques transformados em dados estruturados.
+- `Cartoes de credito`: catalogo descoberto pelo historico, com tipo e uso editaveis.
 - `Aplicativos`: resumo reconstruido pelo Apps Script depois de cada envio.
 - `Dashboard`: indicadores gerais e grafico de categorias.
 - `Dashboard financeiro`: gastos por periodo, grupo, estabelecimento, horario e instituicao.
@@ -19,6 +20,7 @@ As tabelas visuais sao padronizadas em verde e recebem estes nomes:
 - `Aplicativos`: `ResumoAplicativos`.
 - `Financeiro`: `NotificacoesFinanceiras`.
 - `Lancamentos`: `LancamentosFinanceiros`.
+- `Cartoes de credito`: `CatalogoCartoes`.
 
 O `Code.gs` nao contem token, ID de planilha, ID de pasta ou nomes de abas. Toda a
 configuracao fica em **Configuracoes do projeto > Propriedades do script** no Apps Script.
@@ -37,6 +39,7 @@ Cadastre estas propriedades exatamente como abaixo:
 | `SHEET_APPLICATIONS` | `Aplicativos` |
 | `SHEET_FINANCIAL` | `Financeiro` |
 | `SHEET_TRANSACTIONS` | `Lancamentos` |
+| `SHEET_CREDIT_CARDS` | `Cartoes de credito` |
 | `SHEET_DASHBOARD` | `Dashboard` |
 | `SHEET_FINANCIAL_DASHBOARD` | `Dashboard financeiro` |
 | `SHEET_HELP` | `Ajuda` |
@@ -91,7 +94,7 @@ Ao substituir o `Code.gs` por uma versao mais nova, abra **Implantar > Gerenciar
 implantacoes**, edite a implantacao, escolha **Nova versao** e confirme. Apenas salvar
 o codigo nao atualiza a URL `/exec` que o Android esta usando.
 
-Na versao 0.7.0 do script, execute tambem `configurarAtualizacaoAutomatica` uma vez pelo editor.
+Na versao 0.7.1 do script, execute tambem `configurarAtualizacaoAutomatica` uma vez pelo editor.
 Ela substitui os acionadores anteriores por dois novos: uma verificacao completa a cada
 5 minutos e uma atualizacao do `Dashboard financeiro` quando as datas de inicio ou fim
 sao editadas. Cada lote recebido tambem atualiza os resumos imediatamente. Se um painel
@@ -112,6 +115,18 @@ como `Promocoes`.
 entrada ou saida efetiva. Boleto apenas disponivel e aviso de fatura nao sao somados como
 gasto, pois ainda nao comprovam pagamento. O parser reconhece os formatos atuais de
 Nubank, C6 Bank, Neon e Santander e pode ser ampliado quando surgir um texto novo.
+
+`Cartoes de credito` e reconstruida sem apagar as escolhas manuais. O script descobre
+instituicao, quatro ultimos digitos, primeira e ultima notificacao, compras aprovadas e
+total observado. Preencha `Tipo` com `Virtual` ou `Fisico`, alem de apelido, titular e
+uso principal. `Nao informado` mantem o item marcado para revisao. Depois da proxima
+atualizacao, o tipo escolhido corrige `Cartao virtual?` em `Lancamentos`; o uso principal
+serve como classificacao de apoio quando o estabelecimento ainda nao for reconhecido.
+
+Compras recusadas continuam como avisos financeiros, mas nunca viram lancamento. Uma
+confirmacao de pagamento da Shopee permanece em `Compras`, evitando duplicar a cobranca
+confirmada pelo banco. Mensagens cujo texto se parece com token ou segredo sao marcadas
+como `Seguranca` e sensiveis; ainda assim, qualquer token exposto deve ser trocado.
 
 No `Dashboard financeiro`, edite as celulas amarelas `Inicio` e `Fim`. O acionador refaz
 o painel com o periodo escolhido. Os valores de Shopee, iFood, Uber e comida na rua sao
